@@ -13,15 +13,16 @@ echo [build-sidecar] 项目根: %CD%
 REM 探测含 akshare 的 Python：优先 VIRTUAL_ENV，否则 PATH 上的 python
 set "PY=%VIRTUAL_ENV%\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
-"%PY%" -c "import akshare" >nul 2>nul || (
-  echo [build-sidecar] %PY% 未包含 akshare。请先 activate 项目 venv（含 akshare）后运行。
-  goto :fail
-)
 
 echo [build-sidecar] 使用 Python: %PY%
 "%PY%" -m pip install -r backend\requirements-sidecar.txt || goto :fail
 "%PY%" -m pip show pyinstaller >nul 2>nul || "%PY%" -m pip install pyinstaller
 if errorlevel 1 goto :fail
+
+"%PY%" -c "import akshare" >nul 2>nul || (
+  echo [build-sidecar] 依赖安装后仍无法导入 akshare，请检查 backend\requirements-sidecar.txt
+  goto :fail
+)
 
 REM 必须从项目根执行；--distpath 把产物定向到 dist/backend（避免跑到 backend/dist）
 "%PY%" -m PyInstaller backend\sidecar-server.spec --noconfirm --distpath dist\backend --workpath build\backend
