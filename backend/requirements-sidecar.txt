@@ -1,0 +1,16 @@
+# A股博弈雷达 · sidecar-server 依赖清单
+# 2026-10 实测通过，升级需重跑打包验证。
+# 运行环境：项目 venv（akshare/efinance 装在 venv，非系统 Python）。
+# 注意：akshare 版本尤其要锁死，新版本可能改 import 路径导致 hiddenimports 失效。
+akshare==1.18.97
+efinance==0.5.9
+pandas==3.0.6
+numpy==2.5.3
+requests==2.34.2
+lxml==6.1.3
+beautifulsoup4==4.15.0
+jsonpath==0.82.2
+py_mini_racer==0.6.0
+# baostock：当前服务端未直接 import、venv 也未安装，故不收录；
+# 若以后启用，先在此安装（去掉下行注释）并同步解锁 sidecar-server.spec 中的对应注释后重新打包。
+# baostock

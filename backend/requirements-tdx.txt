@@ -1,0 +1,7 @@
+# A股博弈雷达 · tdx-server 依赖清单
+# 2026-10 实测通过，升级需重跑打包验证。
+# 运行环境：系统 Python 3.13.12（pytdx 装在系统 Python，非 venv）。
+pytdx==1.72
+pandas==3.0.6
+numpy==2.5.3
+requests==2.34.2

@@ -1,0 +1,59 @@
+# electron-builder 配置（Windows）
+# 产物：安装版 A股博弈雷达 Setup x.x.x.exe（NSIS，桌面/开始菜单/卸载）
+#       便携版 A股博弈雷达 Portable x.x.x.exe（单目录解压即用，数据重定向到 exe 同目录 data/）
+appId: com.astock.radar
+productName: A股博弈雷达
+copyright: Copyright © 2026 A股博弈雷达（仅供学习研究，不构成投资建议）
+directories:
+  output: dist-electron
+  buildResources: build
+files:
+  - package.json
+  - server/**/*
+  - capability-matrix.json
+  - electron/**/*
+  - "!.env"
+  - "!**/*.map"
+  - "!node_modules/**/*"
+# ESM 的 server 树必须抽离出 asar，否则 node 的 ESM loader 无法解析 asar 内路径
+asarUnpack:
+  - server/**/*
+  - capability-matrix.json
+# extraResources：把两类产物放到 asar 之外（resources/ 下），绝不进 asar
+#   1) web 产物（vite 输出到 dist/web）→ resources/dist，对齐 main.js 的 APP_STATIC_DIR（resources/dist），
+#      由 node-api 静态托管；若进 asar，前端无法经 node-api 加载。
+#   2) Python 后端 exe（PyInstaller onedir 产物 dist/backend）→ resources/backend，
+#      由 main.js 的 resolveService 读取、spawn 拉起。
+# 精简版开关：让 build-win.bat 跳过 sidecar 构建，dist/backend 下就不会有 sidecar-server 目录，
+#            运行时 main.js 自动跳过 sidecar（仅横幅不阻塞，不打包不拉起）。
+extraResources:
+  - from: dist/web
+    to: dist
+  - from: dist/backend
+    to: backend
+win:
+  target:
+    - target: nsis
+      arch: x64
+    - target: portable
+      arch: x64
+  # 占位图标，发布前替换为正式 build/icon.ico
+  icon: build/icon.ico
+  requestedExecutionLevel: asInvoker
+  # 本地自用构建不签名：提供自定义 no-op 签名器，避免 electron-builder 下载
+  # winCodeSign（其 7z 含 macOS 符号链接，当前账户无建符号链接特权会解压失败）。
+  # 发布签名版时改为真实签名逻辑并移除本行。
+  sign: ./scripts/noop-sign.cjs
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: A股博弈雷达
+  uninstallDisplayName: A股博弈雷达
+  artifactName: ${productName} Setup ${version}.${ext}
+portable:
+  artifactName: ${productName} Portable ${version}.${ext}
+  unpackDirName: astock-radar
+publish: null

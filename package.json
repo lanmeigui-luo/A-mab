@@ -1,0 +1,34 @@
+{
+  "name": "astock-radar",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "electron/main.js",
+  "author": "astock-radar",
+  "description": "A股博弈雷达 - 本地优先的行情与战法辅助工具（仅供学习研究）",
+  "scripts": {
+    "dev": "concurrently -n tdx,sidecar,server,web -c green,yellow,cyan,magenta \"npm:dev:tdx\" \"npm:dev:sidecar\" \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:tdx": "node scripts/run-tdx.mjs",
+    "dev:sidecar": "node scripts/run-sidecar.mjs",
+    "dev:server": "node server/index.mjs",
+    "dev:web": "vite",
+    "build": "tsc -b && vite build",
+    "build:win": "electron-builder --win",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
