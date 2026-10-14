@@ -70,15 +70,22 @@ jobs:
         run: call .venv\Scripts\activate.bat && call scripts\build-tdx.bat
 
       - name: Smoke test tdx-server
-        shell: cmd
+        shell: pwsh
         continue-on-error: true
         run: |
-          echo === TDX smoke test ===
-          start /b dist\backend\tdx-server\tdx-server.exe --port 0 > tdx-smoke.log 2>&1
-          ping 127.0.0.1 -n 11 > nul
-          taskkill /F /IM tdx-server.exe > nul 2>&1
-          echo === tdx-smoke.log ===
-          type tdx-smoke.log
+          $exe = "dist\backend\tdx-server\tdx-server.exe"
+          Write-Host "=== running $exe ==="
+          $p = Start-Process -FilePath $exe -ArgumentList "--port","0" `
+                -RedirectStandardOutput "tdx-out.log" `
+                -RedirectStandardError "tdx-err.log" `
+                -PassThru -NoNewWindow
+          Start-Sleep -Seconds 15
+          if (!$p.HasExited) { $p.Kill() }
+          Write-Host "=== exit code: $($p.ExitCode) ==="
+          Write-Host "=== stdout ==="
+          if (Test-Path tdx-out.log) { Get-Content tdx-out.log } else { Write-Host "(no stdout)" }
+          Write-Host "=== stderr ==="
+          if (Test-Path tdx-err.log) { Get-Content tdx-err.log } else { Write-Host "(no stderr)" }
           
       - name: Build sidecar server
         shell: cmd
