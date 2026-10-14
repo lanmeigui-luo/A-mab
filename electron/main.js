@@ -255,7 +255,7 @@ async function startup() {
   process.env.PORT = String(apiPort);
 
   // 2) 主源 tdx（必起）：读 stdout 拿实际端口；拿不到 → 错误窗
-  const TDX_TIMEOUT_MS = 5000;
+  const TDX_TIMEOUT_MS = 15000;
   const tdxPort = await spawnAndReadPort(SERVICES[0], TDX_TIMEOUT_MS);
   if (tdxPort == null) {
     showErrorWindow('主数据源启动失败', `通达信行情服务（tdx-server）${Math.round(TDX_TIMEOUT_MS / 1000)} 秒内未回写端口。请点「查看日志」查看 tdx-server.log。`);
@@ -275,7 +275,7 @@ async function startup() {
   } else {
     const sidecarPort = await spawnAndReadPort(SERVICES[1], 15000);
     if (sidecarPort == null) {
-      log('[sidecar] 5s 内未回写端口，补充源进程崩溃/未就绪（横幅提示，不阻塞主窗口）');
+      log('[sidecar] 15s 内未回写端口，补充源进程崩溃/未就绪（横幅提示，不阻塞主窗口）');
       process.env.SIDECAR = 'http://127.0.0.1:0';
     } else {
       process.env.SIDECAR = `http://127.0.0.1:${sidecarPort}`;
