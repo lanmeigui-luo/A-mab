@@ -117,13 +117,17 @@ function spawnAndReadPort(svc, timeoutMs = 5000) {
     const args = resolved.via === 'exe' ? ['--port', '0'] : [resolved.pyPath, '--port', '0'];
     const child = spawn(resolved.cmd, args, {
       windowsHide: true,
-      detached: true,
+      detached: false,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     if (child.pid) childPids.add(child.pid);
     const out = fs.createWriteStream(path.join(LOG_DIR, `${svc.id}.log`), { flags: 'a' });
     child.stderr?.pipe(out);
+    // 诊断加固：stderr 同时写入 Electron 主进程日志（main.log），便于排查子进程异常
+    child.stderr?.on('data', (chunk) => {
+      log(`[${svc.id}][stderr] ${chunk.toString('utf8').trim()}`);
+    });
     const rl = readline.createInterface({ input: child.stdout });
     let done = false;
     const finish = (port) => {
@@ -142,7 +146,8 @@ function spawnAndReadPort(svc, timeoutMs = 5000) {
       }
     });
     child.on('exit', (code) => {
-      log(`[${svc.id}] 进程退出 code=${code}`);
+      const dt = ((Date.now() - t0) / 1000).toFixed(1);
+      log(`[${svc.id}] 进程退出 code=${code}（耗时 ${dt}s）`);
       if (child.pid) childPids.delete(child.pid);
       finish(null);
     });
@@ -250,9 +255,10 @@ async function startup() {
   process.env.PORT = String(apiPort);
 
   // 2) 主源 tdx（必起）：读 stdout 拿实际端口；拿不到 → 错误窗
-  const tdxPort = await spawnAndReadPort(SERVICES[0], 5000);
+  const TDX_TIMEOUT_MS = 5000;
+  const tdxPort = await spawnAndReadPort(SERVICES[0], TDX_TIMEOUT_MS);
   if (tdxPort == null) {
-    showErrorWindow('主数据源启动失败', '通达信行情服务（tdx-server）5 秒内未回写端口。请点「查看日志」查看 tdx-server.log。');
+    showErrorWindow('主数据源启动失败', `通达信行情服务（tdx-server）${Math.round(TDX_TIMEOUT_MS / 1000)} 秒内未回写端口。请点「查看日志」查看 tdx-server.log。`);
     return;
   }
   process.env.TDX = `http://127.0.0.1:${tdxPort}`;
