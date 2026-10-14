@@ -250,7 +250,7 @@ async function startup() {
   process.env.PORT = String(apiPort);
 
   // 2) 主源 tdx（必起）：读 stdout 拿实际端口；拿不到 → 错误窗
-  const tdxPort = await spawnAndReadPort(SERVICES[0], 5000);
+  const tdxPort = await spawnAndReadPort(SERVICES[0], 15000);
   if (tdxPort == null) {
     showErrorWindow('主数据源启动失败', '通达信行情服务（tdx-server）5 秒内未回写端口。请点「查看日志」查看 tdx-server.log。');
     return;
