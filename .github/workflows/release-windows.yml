@@ -75,7 +75,9 @@ jobs:
         run: |
           echo === TDX smoke test ===
           start /b dist\backend\tdx-server\tdx-server.exe --port 0 > tdx-smoke.log 2>&1
-          timeout /t 10 /nobreak
+          ping 127.0.0.1 -n 11 > nul
+          taskkill /F /IM tdx-server.exe > nul 2>&1
+          echo === tdx-smoke.log ===
           type tdx-smoke.log
           
       - name: Build sidecar server
