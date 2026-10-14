@@ -81,7 +81,7 @@ async function savePorts(p) {
 }
 
 function extraResourcesDir() {
-  return process.resourcesPath ? path.join(process.resourcesPath, 'extraResources') : null;
+  return process.resourcesPath || null;
 }
 
 // 生产：extraResources/xxx-server.exe；dev：python 源码（需 PYTHON_BIN 指向 venv）
