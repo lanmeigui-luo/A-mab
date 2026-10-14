@@ -69,6 +69,15 @@ jobs:
         shell: cmd
         run: call .venv\Scripts\activate.bat && call scripts\build-tdx.bat
 
+      - name: Smoke test tdx-server
+        shell: cmd
+        continue-on-error: true
+        run: |
+          echo === TDX smoke test ===
+          start /b dist\backend\tdx-server\tdx-server.exe --port 0 > tdx-smoke.log 2>&1
+          timeout /t 10 /nobreak
+          type tdx-smoke.log
+          
       - name: Build sidecar server
         shell: cmd
         run: call .venv\Scripts\activate.bat && call scripts\build-sidecar.bat
