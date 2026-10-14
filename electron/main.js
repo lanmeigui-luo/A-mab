@@ -6,8 +6,9 @@
 // - 端口不硬编码：
 //     · API 端口（node-api 内置于主进程）用 net.listen(0) 抢空闲端口并持久化到
 //       userData/ports.json，下次优先复用（localStorage 按 origin 隔离，端口稳定才能保留已加密的模型 Key）。
-//     · tdx-server / sidecar-server 由各自 exe 用 --port 0 让系统分配端口，
-//       再回写 stdout 的 PORT=<实际端口>，主进程 readline 读取后注入 node-api 的 TDX/SIDECAR 环境变量。
+//     · tdx-server / sidecar-server 用固定端口（tdx=8789、sidecar=8788）拉起，
+//       主进程轮询其 /health 接口确认就绪后，注入 node-api 的 TDX/SIDECAR 环境变量。
+//       （早期版本用 --port 0 + 读取 stdout 的 PORT=，但 Windows 下 Python pipe 块缓冲导致回写丢失，已弃用。）
 // - tdx-server 为主源，必拉起；sidecar-server 为补充源，best-effort，失败仅横幅不阻塞。
 //   精简版（extraResources 不含 sidecar-server.exe）自动跳过。
 // - node-api 跑在主进程内（Electron 即 Node≥20），无需独立 Node 运行时。
@@ -155,8 +156,8 @@ function spawnAndReadPort(svc, timeoutMs = 5000) {
   });
 }
 
-async function waitForHealth(port, timeoutMs = 30000) {
-  const url = `http://127.0.0.1:${port}/api/health`;
+async function waitForHealth(port, timeoutMs = 30000, healthPath = '/api/health') {
+  const url = `http://127.0.0.1:${port}${healthPath}`;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -166,6 +167,39 @@ async function waitForHealth(port, timeoutMs = 30000) {
     await new Promise((r) => setTimeout(r, 500));
   }
   return false;
+}
+
+// 方案 B：固定端口 + 轮询 /health 拉起 Python 后端，不再依赖 stdout 的 PORT=（规避 Windows
+// 下 Python 子进程 pipe 块缓冲导致回写丢失）。返回 true=health 就绪 / false=超时或启动失败。
+async function spawnFixedPort(svc, port, timeoutMs = 15000) {
+  const resolved = resolveService(svc);
+  if (!resolved) {
+    log(`[${svc.id}] 未找到可执行文件（extraResources 与源码均缺失），跳过`);
+    return false;
+  }
+  const env = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+  const args = resolved.via === 'exe' ? ['--port', String(port)] : [resolved.pyPath, '--port', String(port)];
+  // exe 模式 cwd 落到 exe 所在目录（保证 _internal/ 相对资源可解析）；py 模式落到 server.py 目录。
+  const cwd = resolved.via === 'exe' ? path.dirname(resolved.cmd) : path.dirname(resolved.pyPath);
+  const child = spawn(resolved.cmd, args, {
+    cwd,
+    windowsHide: true,
+    detached: false,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (child.pid) childPids.add(child.pid);
+  const out = fs.createWriteStream(path.join(LOG_DIR, `${svc.id}.log`), { flags: 'a' });
+  child.stderr?.pipe(out);
+  child.stderr?.on('data', (chunk) => {
+    log(`[${svc.id}][stderr] ${chunk.toString('utf8').trim()}`);
+  });
+  child.on('exit', (code) => {
+    log(`[${svc.id}] 进程退出 code=${code}`);
+    if (child.pid) childPids.delete(child.pid);
+  });
+  log(`[${svc.id}] 已按固定端口 ${port} 拉起，开始轮询 /health（超时 ${Math.round(timeoutMs / 1000)}s）`);
+  return waitForHealth(port, timeoutMs, '/health');
 }
 
 // 生产态 server 经 asarUnpack 抽离到 app.asar.unpacked，ESM import 才能解析
@@ -254,31 +288,31 @@ async function startup() {
   await savePorts({ api: apiPort });
   process.env.PORT = String(apiPort);
 
-  // 2) 主源 tdx（必起）：读 stdout 拿实际端口；拿不到 → 错误窗
+  // 2) 主源 tdx（必起）：固定端口 8789 + 轮询 /health；超时 → 错误窗
   const TDX_TIMEOUT_MS = 15000;
-  const tdxPort = await spawnAndReadPort(SERVICES[0], TDX_TIMEOUT_MS);
-  if (tdxPort == null) {
-    showErrorWindow('主数据源启动失败', `通达信行情服务（tdx-server）${Math.round(TDX_TIMEOUT_MS / 1000)} 秒内未回写端口。请点「查看日志」查看 tdx-server.log。`);
+  const tdxOk = await spawnFixedPort(SERVICES[0], 8789, TDX_TIMEOUT_MS);
+  if (!tdxOk) {
+    showErrorWindow('主数据源启动失败', `通达信行情服务（tdx-server）${Math.round(TDX_TIMEOUT_MS / 1000)} 秒内 health 探测超时。请点「查看日志」查看 tdx-server.log。`);
     return;
   }
-  process.env.TDX = `http://127.0.0.1:${tdxPort}`;
+  process.env.TDX = 'http://127.0.0.1:8789';
 
-  // 3) 补充源 sidecar（best-effort）：先判定「精简版禁用」vs「可能崩溃」，二者 health 状态不同。
+  // 3) 补充源 sidecar（best-effort）：固定端口 8788 + 轮询 /health；失败仅横幅不阻塞。
   //    · resolveService 返回 null = extraResources 与源码均缺失 = 精简版 → 显式置 SIDECAR_DISABLED=1
   //      （index.mjs 的 sidecarHealth 据此返回 disabled:true，区别于进程崩溃）。
-  //    · 否则正常拉起；拉起后 15s 内仍未回写端口 = 进程崩溃/未就绪 → 标 SIDECAR=0，
+  //    · 否则固定端口拉起；15s 内 /health 仍超时 = 进程崩溃/未就绪 → 标 SIDECAR=0，
   //      由 sidecarHealth 标记 processAlive:false（disabled 仍为 false），前端据此区分。
   const sidecarResolved = resolveService(SERVICES[1]);
   if (!sidecarResolved) {
     process.env.SIDECAR_DISABLED = '1';
     log('[sidecar] 精简版未含 sidecar-server.exe，补充源禁用（横幅提示，不阻塞主窗口）');
   } else {
-    const sidecarPort = await spawnAndReadPort(SERVICES[1], 15000);
-    if (sidecarPort == null) {
-      log('[sidecar] 15s 内未回写端口，补充源进程崩溃/未就绪（横幅提示，不阻塞主窗口）');
+    const sidecarOk = await spawnFixedPort(SERVICES[1], 8788, 15000);
+    if (!sidecarOk) {
+      log('[sidecar] 15s 内 health 探测超时，补充源进程崩溃/未就绪（横幅提示，不阻塞主窗口）');
       process.env.SIDECAR = 'http://127.0.0.1:0';
     } else {
-      process.env.SIDECAR = `http://127.0.0.1:${sidecarPort}`;
+      process.env.SIDECAR = 'http://127.0.0.1:8788';
     }
   }
 
