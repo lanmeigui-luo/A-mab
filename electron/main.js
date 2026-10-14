@@ -14,7 +14,7 @@
 // - node-api 跑在主进程内（Electron 即 Node≥20），无需独立 Node 运行时。
 // - 关闭窗口 → taskkill 杀掉两个 Python 子进程树，主进程退出即 node-api 退出。
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, clipboard } from 'electron';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import net from 'node:net';
@@ -170,12 +170,17 @@ async function waitForHealth(port, timeoutMs = 30000, healthPath = '/api/health'
 }
 
 // 方案 B：固定端口 + 轮询 /health 拉起 Python 后端，不再依赖 stdout 的 PORT=（规避 Windows
-// 下 Python 子进程 pipe 块缓冲导致回写丢失）。返回 true=health 就绪 / false=超时或启动失败。
+// 下 Python 子进程 pipe 块缓冲导致回写丢失）。返回 { ok:true } 或 { ok:false, ...诊断 }。
+// 诊断含 pid / exitCode / exitTime / healthUrl / 最后 20 行 stderr，供错误窗直接展示，免去翻日志。
 async function spawnFixedPort(svc, port, timeoutMs = 15000) {
+  const healthUrl = `http://127.0.0.1:${port}/health`;
   const resolved = resolveService(svc);
   if (!resolved) {
     log(`[${svc.id}] 未找到可执行文件（extraResources 与源码均缺失），跳过`);
-    return false;
+    return {
+      ok: false, id: svc.id, reason: 'missing-exe', pid: null, exitCode: null, exitTime: null,
+      healthUrl, stderr: [`未找到可执行文件：extraResources 与源码均缺失`],
+    };
   }
   const env = { ...process.env, PYTHONIOENCODING: 'utf-8' };
   const args = resolved.via === 'exe' ? ['--port', String(port)] : [resolved.pyPath, '--port', String(port)];
@@ -188,18 +193,39 @@ async function spawnFixedPort(svc, port, timeoutMs = 15000) {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  if (child.pid) childPids.add(child.pid);
+  const pid = child.pid || null;
+  if (pid) childPids.add(pid);
   const out = fs.createWriteStream(path.join(LOG_DIR, `${svc.id}.log`), { flags: 'a' });
   child.stderr?.pipe(out);
+  const stderrLines = [];
   child.stderr?.on('data', (chunk) => {
-    log(`[${svc.id}][stderr] ${chunk.toString('utf8').trim()}`);
+    const txt = chunk.toString('utf8').trim();
+    log(`[${svc.id}][stderr] ${txt}`);
+    for (const line of txt.split(/\r?\n/)) {
+      if (!line) continue;
+      stderrLines.push(line);
+      if (stderrLines.length > 20) stderrLines.shift();
+    }
   });
+  let exitCode = null;
+  let exitTime = null;
   child.on('exit', (code) => {
+    exitCode = code;
+    exitTime = new Date().toISOString();
     log(`[${svc.id}] 进程退出 code=${code}`);
-    if (child.pid) childPids.delete(child.pid);
+    if (pid) childPids.delete(pid);
   });
-  log(`[${svc.id}] 已按固定端口 ${port} 拉起，开始轮询 /health（超时 ${Math.round(timeoutMs / 1000)}s）`);
-  return waitForHealth(port, timeoutMs, '/health');
+  log(`[${svc.id}] 已按固定端口 ${port} 拉起（pid=${pid}），开始轮询 /health（超时 ${Math.round(timeoutMs / 1000)}s）`);
+  const ok = await waitForHealth(port, timeoutMs, '/health');
+  if (ok) return { ok: true, id: svc.id, pid, healthUrl };
+  return {
+    ok: false, id: svc.id,
+    reason: exitCode != null ? 'exited' : 'timeout',
+    pid, exitCode, exitTime, healthUrl,
+    cmd: `${resolved.cmd} ${args.join(' ')}`,
+    cwd,
+    stderr: stderrLines.slice(-20),
+  };
 }
 
 // 生产态 server 经 asarUnpack 抽离到 app.asar.unpacked，ESM import 才能解析
@@ -235,26 +261,62 @@ function createWindow(apiPort) {
   return win;
 }
 
-function showErrorWindow(title, detail) {
+function showErrorWindow(title, detail, diag) {
   if (errorWindow) { errorWindow.focus(); return; }
-  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // 把诊断信息直接渲染进错误窗，避免用户去翻日志文件；同时存到 lastDiagText 供「复制诊断信息」使用。
+  let diagHtml = '';
+  lastDiagText = '';
+  if (diag) {
+    const status = diag.pid
+      ? (diag.exitCode != null ? `已退出（exit code=${diag.exitCode}）` : '仍在运行')
+      : '未拉起（未找到可执行文件或启动失败）';
+    const stderrBlock = (diag.stderr && diag.stderr.length)
+      ? diag.stderr.join('\n')
+      : '（无 stderr 输出）';
+    lastDiagText =
+`【A股博弈雷达 启动诊断】
+服务: ${diag.id || ''}
+状态: ${status}
+PID: ${diag.pid != null ? diag.pid : '未知'}
+退出时间: ${diag.exitTime || '—'}
+Health URL: ${diag.healthUrl || ''}
+启动命令: ${diag.cmd || ''}
+工作目录: ${diag.cwd || ''}
+日志目录: ${LOG_DIR}
+最后 20 行 stderr:
+${stderrBlock}`;
+    diagHtml =
+      `<div class="diag"><div class="diag-title">诊断信息（无需打开日志文件）</div>` +
+      `<pre>${esc(lastDiagText)}</pre></div>`;
+  }
+
+  const copyBtn = diagHtml
+    ? `<button class="ghost" onclick="window.__APP_CONFIG__.bridge.copyDiag()">复制诊断信息</button>`
+    : '';
   const body =
     `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">` +
     `<style>body{font-family:system-ui,-apple-system,sans-serif;background:#1b1d22;color:#e6e6e6;` +
-    `margin:0;padding:32px;display:flex;flex-direction:column;height:100vh;box-sizing:border-box}` +
-    `h1{font-size:18px;margin:0 0 12px}p{color:#b9bcc4;line-height:1.6;flex:1}` +
-    `.row{display:flex;gap:12px}button{background:#2d6cdf;color:#fff;border:0;border-radius:8px;` +
-    `padding:10px 18px;font-size:14px;cursor:pointer}button.ghost{background:#33363d}` +
+    `margin:0;padding:24px;display:flex;flex-direction:column;height:100vh;box-sizing:border-box}` +
+    `h1{font-size:18px;margin:0 0 10px}p{color:#b9bcc4;line-height:1.6}` +
+    `.diag{margin:12px 0;background:#14161a;border:1px solid #2a2d34;border-radius:8px;padding:12px;flex:1;overflow:auto}` +
+    `.diag-title{color:#9aa0aa;font-size:12px;margin-bottom:6px}` +
+    `.diag pre{margin:0;white-space:pre-wrap;word-break:break-all;font-size:12px;color:#cfd3da;line-height:1.5}` +
+    `.row{display:flex;gap:10px;flex-wrap:wrap}button{background:#2d6cdf;color:#fff;border:0;border-radius:8px;` +
+    `padding:10px 16px;font-size:14px;cursor:pointer}button.ghost{background:#3a3e47}` +
     `button.danger{background:#c0392b}</style></head><body>` +
     `<h1>${esc(title)}</h1><p>${esc(detail)}</p>` +
+    diagHtml +
     `<div class="row">` +
     `<button onclick="window.__APP_CONFIG__.bridge.openLogDir()">查看日志</button>` +
+    copyBtn +
     `<button class="ghost" onclick="window.__APP_CONFIG__.bridge.retry()">重试</button>` +
     `<button class="danger" onclick="window.__APP_CONFIG__.bridge.quit()">退出</button>` +
     `</div></body></html>`;
   errorWindow = new BrowserWindow({
-    width: 560,
-    height: 360,
+    width: 660,
+    height: 560,
     title: '启动失败',
     show: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false, preload: path.join(__dirname, 'preload.js') },
@@ -288,11 +350,11 @@ async function startup() {
   await savePorts({ api: apiPort });
   process.env.PORT = String(apiPort);
 
-  // 2) 主源 tdx（必起）：固定端口 8789 + 轮询 /health；超时 → 错误窗
+  // 2) 主源 tdx（必起）：固定端口 8789 + 轮询 /health；超时 → 错误窗（含诊断）
   const TDX_TIMEOUT_MS = 15000;
-  const tdxOk = await spawnFixedPort(SERVICES[0], 8789, TDX_TIMEOUT_MS);
-  if (!tdxOk) {
-    showErrorWindow('主数据源启动失败', `通达信行情服务（tdx-server）${Math.round(TDX_TIMEOUT_MS / 1000)} 秒内 health 探测超时。请点「查看日志」查看 tdx-server.log。`);
+  const tdxResult = await spawnFixedPort(SERVICES[0], 8789, TDX_TIMEOUT_MS);
+  if (!tdxResult.ok) {
+    showErrorWindow('主数据源启动失败', `通达信行情服务（tdx-server）${Math.round(TDX_TIMEOUT_MS / 1000)} 秒内 health 探测超时（端口 8789）。详见下方诊断信息，无需打开日志文件。`, tdxResult);
     return;
   }
   process.env.TDX = 'http://127.0.0.1:8789';
@@ -307,8 +369,8 @@ async function startup() {
     process.env.SIDECAR_DISABLED = '1';
     log('[sidecar] 精简版未含 sidecar-server.exe，补充源禁用（横幅提示，不阻塞主窗口）');
   } else {
-    const sidecarOk = await spawnFixedPort(SERVICES[1], 8788, 15000);
-    if (!sidecarOk) {
+    const sidecarResult = await spawnFixedPort(SERVICES[1], 8788, 15000);
+    if (!sidecarResult.ok) {
       log('[sidecar] 15s 内 health 探测超时，补充源进程崩溃/未就绪（横幅提示，不阻塞主窗口）');
       process.env.SIDECAR = 'http://127.0.0.1:0';
     } else {
@@ -335,7 +397,15 @@ async function startup() {
 }
 
 // ---- IPC：错误窗按钮 ----
-ipcMain.handle('app:open-log-dir', async () => { shell.openPath(LOG_DIR); });
+ipcMain.handle('app:open-log-dir', async () => {
+  try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { /* ignore */ }
+  const err = await shell.openPath(LOG_DIR);
+  if (err) log('[open-log-dir] shell.openPath 返回错误: ' + err);
+  return err;
+});
+ipcMain.handle('app:copy-diagnostic', async () => {
+  try { if (lastDiagText) clipboard.writeText(lastDiagText); return true; } catch { return false; }
+});
 ipcMain.handle('app:retry', async () => { app.relaunch(); app.exit(0); });
 ipcMain.handle('app:quit', async () => { app.quit(); });
 

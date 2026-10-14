@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('__APP_CONFIG__', {
   isDesktop: true,
   bridge: {
     openLogDir: () => ipcRenderer.invoke('app:open-log-dir'),
+    copyDiag: () => ipcRenderer.invoke('app:copy-diagnostic'),
     retry: () => ipcRenderer.invoke('app:retry'),
     quit: () => ipcRenderer.invoke('app:quit'),
   },
