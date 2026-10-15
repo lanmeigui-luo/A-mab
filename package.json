@@ -15,7 +15,8 @@
     "build": "tsc -b && vite build",
     "build:win": "electron-builder --win",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint:electron": "node --check electron/main.js && node --check electron/preload.js"
   },
   "dependencies": {
     "react": "^18.3.1",

@@ -40,6 +40,10 @@ const SERVICES = [
 let mainWindow = null;
 let errorWindow = null;
 const childPids = new Set();
+// 最近一次启动诊断文本，供错误窗「复制诊断信息」按钮读取。
+// 必须在模块顶层声明：ESM 严格模式下给未声明变量赋值会抛 ReferenceError，
+// 曾因漏声明导致 tdx 失败分支崩溃（错误窗建不出来、主进程直接退出）。
+let lastDiagText = '';
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
