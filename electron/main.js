@@ -32,9 +32,11 @@ const PORTS_FILE = path.join(USER_DATA, 'ports.json');
 
 // 两个 Python 后端；exe 由 PyInstaller 产出（batch 2），dev 回退到 python 源码。
 // required=true 表示主源，缺失时 node-api 会自动降级腾讯/新浪（不致命）。
+// 注意：PyInstaller onedir 产物目录名带 -server 后缀（tdx-server/、sidecar-server/），
+// 与 svc.id（tdx/sidecar）不同，故单独用 dir 字段显式声明，避免路径拼接错位。
 const SERVICES = [
-  { id: 'tdx', exe: 'tdx-server.exe', py: 'tdx/server.py' },
-  { id: 'sidecar', exe: 'sidecar-server.exe', py: 'sidecar/server.py' },
+  { id: 'tdx', dir: 'tdx-server', exe: 'tdx-server.exe', py: 'tdx/server.py' },
+  { id: 'sidecar', dir: 'sidecar-server', exe: 'sidecar-server.exe', py: 'sidecar/server.py' },
 ];
 
 let mainWindow = null;
@@ -88,19 +90,23 @@ function extraResourcesDir() {
   return process.resourcesPath || null;
 }
 
-// 生产：extraResources/xxx-server.exe；dev：python 源码（需 PYTHON_BIN 指向 venv）
+// 生产：extraResources/backend/<dir>/<exe>；dev：python 源码（需 PYTHON_BIN 指向 venv）
 function resolveService(svc) {
   const extra = extraResourcesDir();
   if (extra) {
-    // onedir 产物在 extraResources/backend/<id>/<id>-server.exe 子目录内
-    const prod = path.join(extra, 'backend', svc.id, svc.exe);
+    // onedir 产物目录名为 svc.dir（带 -server 后缀），exe 在其内
+    const prod = path.join(extra, 'backend', svc.dir, svc.exe);
     if (fs.existsSync(prod)) return { cmd: prod, via: 'exe' };
+    // 诊断保险：记录尝试过的完整路径，便于错误窗/日志定位“找不到 exe”
+    log(`[${svc.id}] 未命中 exe（尝试路径）：${prod}`);
   }
   const pyPath = path.join(app.getAppPath(), svc.py);
   if (fs.existsSync(pyPath)) {
     const pyBin = process.env.PYTHON_BIN || 'python';
     return { cmd: pyBin, pyPath, via: 'py' };
   }
+  // 诊断保险：prod 与 py 均缺失时，把两者完整路径都记到 main.log
+  log(`[${svc.id}] 未找到可执行文件：prod=${extra ? path.join(extra, 'backend', svc.dir, svc.exe) : '(无 extraResources)'}；py=${pyPath}`);
   return null;
 }
 
