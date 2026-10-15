@@ -186,10 +186,14 @@ async function spawnFixedPort(svc, port, timeoutMs = 15000) {
   const healthUrl = `http://127.0.0.1:${port}/health`;
   const resolved = resolveService(svc);
   if (!resolved) {
+    // 诊断保险：把 resolveService 尝试过的完整路径直接带进错误窗 stderr 区，免去翻日志
+    const extra = extraResourcesDir();
+    const prodPath = extra ? path.join(extra, 'backend', svc.dir, svc.exe) : '(无 extraResources)';
+    const pyPath = path.join(app.getAppPath(), svc.py);
     log(`[${svc.id}] 未找到可执行文件（extraResources 与源码均缺失），跳过`);
     return {
       ok: false, id: svc.id, reason: 'missing-exe', pid: null, exitCode: null, exitTime: null,
-      healthUrl, stderr: [`未找到可执行文件：extraResources 与源码均缺失`],
+      healthUrl, stderr: [`未找到可执行文件`, `尝试路径 1: ${prodPath}`, `尝试路径 2: ${pyPath}`],
     };
   }
   const env = { ...process.env, PYTHONIOENCODING: 'utf-8' };
