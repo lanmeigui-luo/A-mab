@@ -91,6 +91,17 @@ jobs:
         shell: cmd
         run: call .venv\Scripts\activate.bat && call scripts\build-sidecar.bat
 
+      - name: Build frontend (vite -> dist/web)
+        run: npm run build
+
+      - name: Verify dist/web exists
+        shell: pwsh
+        run: |
+          if (!(Test-Path "dist\web\index.html")) {
+            Write-Error "dist/web not found - frontend build missing. Aborting."
+            exit 1
+          }
+
       - name: Build Electron app
         run: npm run build:win
 
