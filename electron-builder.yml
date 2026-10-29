@@ -15,6 +15,8 @@ files:
   - "!.env"
   - "!**/*.map"
   - "!node_modules/**/*"
+  # 运行时数据目录（data/snapshots 等由后端在运行时生成），绝不进 asar / exe
+  - "!data/**/*"
 # ESM 的 server 树必须抽离出 asar，否则 node 的 ESM loader 无法解析 asar 内路径
 asarUnpack:
   - server/**/*
