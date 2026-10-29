@@ -3,10 +3,13 @@ import { usePolling } from '@/hooks/usePolling';
 import { marketApi, type EvalResponse } from '@/services/market';
 import { KlineChart, type SubIndicator } from '@/components/KlineChart';
 import { DeepAnalysis } from '@/components/DeepAnalysis';
-import type { Quote, QuoteResponse } from '@/domain/types';
+import type { Quote, QuoteResponse, MinuteResponse, KlineResponse } from '@/domain/types';
 import { changeColor, formatChange, formatPct } from '@/lib/market-colors';
 import { DASH, fmtAmount, fmtNum, fmtVolume } from '@/lib/format';
 import { calcMA, rangeStats } from '@/lib/indicators';
+import { useWinRateStore } from '@/hooks/useWinRateStore';
+import { computeWinRateStats, filterWinRateRecords } from '@/lib/winrate-stats';
+import { TRADE_STATUS_LABELS } from '@/domain/winrate';
 
 interface Props {
   fullCode: string;
@@ -16,9 +19,10 @@ interface Props {
   onClose: () => void;
 }
 
-type PeriodKey = 'day' | 'week' | 'month' | 'm5' | 'm15' | 'm30' | 'm60';
+type PeriodKey = 'minute' | 'day' | 'week' | 'month' | 'm5' | 'm15' | 'm30' | 'm60';
 
 const PERIODS: { key: PeriodKey; label: string; available: boolean }[] = [
+  { key: 'minute', label: '分时', available: true },
   { key: 'day', label: '日K', available: true },
   { key: 'week', label: '周K', available: true },
   { key: 'month', label: '月K', available: true },
@@ -35,7 +39,7 @@ const FQ: { key: 'qfq' | 'hfq' | 'none'; label: string }[] = [
 ];
 
 export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
-  const [period, setPeriod] = useState<PeriodKey>('day');
+  const [period, setPeriod] = useState<PeriodKey>('minute');
   const [fq, setFq] = useState<'qfq' | 'hfq' | 'none'>('qfq');
   const [showMa, setShowMa] = useState(true);
   const [showBoll, setShowBoll] = useState(false);
@@ -68,22 +72,31 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
   const tradePlan = ev.data?.tradePlan ?? null;
   const signals = ev.data?.strategies ?? [];
 
+  const isIntraday = period === 'minute';
   const isMinute = period.startsWith('m') && period !== 'month';
 
-  const kline = usePolling(
+  // 分时（腾讯当日分钟序列）：仅在分时周期激活轮询，避免空轮询
+  const minute = usePolling<MinuteResponse>(
+    () => marketApi.minute(fullCode),
+    15000,
+    [fullCode],
+    isIntraday,
+  );
+
+  const kline = usePolling<KlineResponse>(
     () =>
       isMinute
         ? marketApi.klineMin(fullCode.slice(2), period.slice(1), fq, 320)
         : marketApi.kline(fullCode, period, fq, count),
     isMinute ? 60000 : 30000,
     [fullCode, period, fq, count],
+    !isIntraday,
   );
 
+  // 当前周期实际使用的取数通道（分时→minute，其余→kline）
+  const active = isIntraday ? minute : kline;
+
   const contextText = useMemo(() => {
-    const rows = kline.data?.rows ?? [];
-    const ma = rows.length ? calcMA(rows) : null;
-    const stats = rows.length ? rangeStats(rows) : null;
-    const last = rows[rows.length - 1];
     const lines = [
       `标的：${quote?.name ?? name}（${fullCode}）`,
       `行情快照：现价 ${quote?.price ?? DASH}，涨跌幅 ${
@@ -97,25 +110,83 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
       '量比：数据缺失（当前通道不提供，不得推测）',
       '主力净流入：数据缺失（本页未接入资金流排名，不得推测）',
     ];
-    if (last && ma) {
-      const i = rows.length - 1;
+
+    if (isIntraday) {
+      const rows = minute.data?.rows ?? [];
+      const last = rows[rows.length - 1];
+      const prevClose = quote?.prevClose;
       lines.push(
-        `K线（${period}，${
-          isMinute ? 'AkShare 东财分钟线' : fq
-        }）：最新 ${last.date} 开${last.open} 高${last.high} 低${last.low} 收${last.close} 量${last.volume}`,
-        `均线：MA5 ${fmtNum(ma.ma5[i])} / MA10 ${fmtNum(ma.ma10[i])} / MA20 ${fmtNum(ma.ma20[i])} / MA60 ${fmtNum(ma.ma60[i])}`,
+        `分时（腾讯当日分钟序列，数据源 ${minute.data?.sourceLabel ?? DASH}）：共 ${rows.length} 个分钟点`,
       );
+      if (last) {
+        const pct =
+          prevClose != null && prevClose !== 0
+            ? ((last.price - prevClose) / prevClose) * 100
+            : null;
+        lines.push(
+          `当前价 ${fmtNum(last.price)}，均价 ${fmtNum(last.avg)}，相对昨收 ${
+            pct != null ? pct.toFixed(2) + '%' : DASH
+          }`,
+          `累计成交 ${fmtVolume(last.cumVolume)}，累计成交额 ${fmtAmount(last.cumAmount / 10000)}`,
+        );
+      }
+    } else {
+      const rows = kline.data?.rows ?? [];
+      const ma = rows.length ? calcMA(rows) : null;
+      const stats = rows.length ? rangeStats(rows) : null;
+      const last = rows[rows.length - 1];
+      if (last && ma) {
+        const i = rows.length - 1;
+        lines.push(
+          `K线（${period}，${
+            isMinute ? 'AkShare 东财分钟线' : fq
+          }）：最新 ${last.date} 开${last.open} 高${last.high} 低${last.low} 收${last.close} 量${last.volume}`,
+          `均线：MA5 ${fmtNum(ma.ma5[i])} / MA10 ${fmtNum(ma.ma10[i])} / MA20 ${fmtNum(ma.ma20[i])} / MA60 ${fmtNum(ma.ma60[i])}`,
+        );
+      }
+      if (stats) {
+        lines.push(
+          `区间统计：${stats.days} 根，涨跌 ${stats.changePct?.toFixed(2)}%，最高 ${stats.high}，最低 ${stats.low}`,
+        );
+      }
     }
-    if (stats) {
-      lines.push(
-        `区间统计：${stats.days} 根，涨跌 ${stats.changePct?.toFixed(2)}%，最高 ${stats.high}，最低 ${stats.low}`,
-      );
-    }
+
     lines.push('事件与公告：数据缺失（本页未接入公告通道，不得推测）');
     return lines.join('\n');
-  }, [quote, name, fullCode, kline.data, period, fq, isMinute]);
+  }, [quote, name, fullCode, minute.data, kline.data, period, fq, isIntraday, isMinute]);
 
   const color = changeColor(quote?.changePct ?? null);
+
+  // P5a：个股联动 —— 复用 store + computeWinRateStats / filterWinRateRecords，按 6 位 code 过滤
+  const wr = useWinRateStore();
+  const stockCode = fullCode.slice(2);
+  const stockRecords = useMemo(
+    () => filterWinRateRecords(wr.records, { code: stockCode, excludeAnomaly: true }),
+    [wr.records, stockCode],
+  );
+  const stockStats = useMemo(
+    () => computeWinRateStats(wr.records, { code: stockCode, excludeAnomaly: true }),
+    [wr.records, stockCode],
+  );
+  const stockLatest = useMemo(() => {
+    if (stockRecords.length === 0) return null;
+    const sorted = [...stockRecords].sort((a, b) => {
+      if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+      const ra = a.recordedAt ?? '';
+      const rb = b.recordedAt ?? '';
+      return ra < rb ? 1 : -1;
+    });
+    return sorted[0];
+  }, [stockRecords]);
+  const stockWinRate = useMemo(() => {
+    let closed = 0;
+    let wins = 0;
+    for (const s of stockStats.byStrategy) {
+      closed += s.closed;
+      wins += s.wins;
+    }
+    return closed > 0 ? { rate: wins / closed, closed } : null;
+  }, [stockStats]);
 
   return (
     <aside className="detail-panel" style={{ width }}>
@@ -153,72 +224,86 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
             ))}
           </div>
 
-          <div className="seg">
-            {FQ.map((f) => (
-              <button
-                key={f.key}
-                className={`seg-btn ${fq === f.key ? 'on' : ''}`}
-                onClick={() => setFq(f.key)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
+          {!isIntraday && (
+            <div className="seg">
+              {FQ.map((f) => (
+                <button
+                  key={f.key}
+                  className={`seg-btn ${fq === f.key ? 'on' : ''}`}
+                  onClick={() => setFq(f.key)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
 
-          <label className="check">
-            <input type="checkbox" checked={showMa} onChange={(e) => setShowMa(e.target.checked)} />
-            MA
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={showBoll} onChange={(e) => setShowBoll(e.target.checked)} />
-            BOLL
-          </label>
+          {!isIntraday && (
+            <label className="check">
+              <input type="checkbox" checked={showMa} onChange={(e) => setShowMa(e.target.checked)} />
+              MA
+            </label>
+          )}
+          {!isIntraday && (
+            <label className="check">
+              <input type="checkbox" checked={showBoll} onChange={(e) => setShowBoll(e.target.checked)} />
+              BOLL
+            </label>
+          )}
 
-          {/* 副图指标切换（需求 7.2 P1） */}
-          <div className="seg">
-            {([
-              { key: 'vol', label: '成交量' },
-              { key: 'macd', label: 'MACD' },
-              { key: 'kdj', label: 'KDJ' },
-              { key: 'rsi', label: 'RSI' },
-            ] as { key: SubIndicator; label: string }[]).map((s) => (
-              <button
-                key={s.key}
-                className={`seg-btn ${sub === s.key ? 'on' : ''}`}
-                onClick={() => setSub(s.key)}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          {/* 副图指标切换（需求 7.2 P1，分时模式不显示） */}
+          {!isIntraday && (
+            <div className="seg">
+              {([
+                { key: 'vol', label: '成交量' },
+                { key: 'macd', label: 'MACD' },
+                { key: 'kdj', label: 'KDJ' },
+                { key: 'rsi', label: 'RSI' },
+              ] as { key: SubIndicator; label: string }[]).map((s) => (
+                <button
+                  key={s.key}
+                  className={`seg-btn ${sub === s.key ? 'on' : ''}`}
+                  onClick={() => setSub(s.key)}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
 
-          <div className="seg">
-            {[60, 120, 250].map((c) => (
-              <button key={c} className={`seg-btn ${count === c ? 'on' : ''}`} onClick={() => setCount(c)}>
-                {c}
-              </button>
-            ))}
-          </div>
+          {!isIntraday && (
+            <div className="seg">
+              {[60, 120, 250].map((c) => (
+                <button key={c} className={`seg-btn ${count === c ? 'on' : ''}`} onClick={() => setCount(c)}>
+                  {c}
+                </button>
+              ))}
+            </div>
+          )}
 
           <span className="spacer" />
-          <span className="src-tag ok">{kline.data?.sourceLabel ?? '加载中'}</span>
-          {kline.data?.elapsedMs != null && <span className="muted">{kline.data.elapsedMs} ms</span>}
+          <span className="src-tag ok">{active.data?.sourceLabel ?? '加载中'}</span>
+          {active.data?.elapsedMs != null && <span className="muted">{active.data.elapsedMs} ms</span>}
           <button className="btn primary" onClick={() => setDeepOpen(true)}>
             深度分析
           </button>
         </div>
 
-        {kline.error ? (
-          <div className="alert error">K 线获取失败：{kline.error}（已保留上一次数据）</div>
+        {active.error ? (
+          <div className="alert error">
+            {isIntraday ? '分时' : 'K 线'}获取失败：{active.error}（已保留上一次数据）
+          </div>
         ) : null}
 
-        {kline.loading && !kline.data ? (
+        {active.loading && !active.data ? (
           <div className="empty">加载中…</div>
-        ) : kline.data && kline.data.rows.length === 0 ? (
-          <div className="empty">暂无该周期 K 线数据</div>
+        ) : active.data && active.data.rows.length === 0 ? (
+          <div className="empty">{isIntraday ? '今日暂无分时数据' : '暂无该周期 K 线数据'}</div>
         ) : (
           <KlineChart
-            rows={kline.data?.rows ?? []}
+            rows={isIntraday ? [] : (kline.data?.rows ?? [])}
+            intraday={isIntraday ? (minute.data?.rows ?? []) : null}
+            prevClose={quote?.prevClose}
             showMa={showMa}
             showBoll={showBoll}
             sub={sub}
@@ -389,15 +474,49 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
           </div>
         </div>
 
+        {/* —— 该股战法胜率记录（P5a 跨页面联动，纯数据展示，不涉及单笔详情弹窗）—— */}
+        <section className="detail-section">
+          <div className="ds-head">该股战法胜率记录</div>
+          {stockRecords.length === 0 ? (
+            <div className="empty">该股暂无战法胜率记录</div>
+          ) : (
+            <>
+              <div className="plan-head">
+                {stockWinRate ? (
+                  <>
+                    该股历史胜率：<strong>{(stockWinRate.rate * 100).toFixed(0)}%</strong>（共{' '}
+                    {stockWinRate.closed} 次平仓）
+                  </>
+                ) : (
+                  <>该股历史胜率：暂无平仓记录（共 {stockRecords.length} 次记录）</>
+                )}
+              </div>
+              {stockLatest && (
+                <div className="muted" style={{ marginTop: 6 }}>
+                  最近一次：{stockLatest.strategyName} · {stockLatest.date} ·{' '}
+                  {stockLatest.trade.status === 'closed' && stockLatest.trade.returnPct != null
+                    ? `${stockLatest.trade.returnPct > 0 ? '+' : ''}${stockLatest.trade.returnPct}%`
+                    : (TRADE_STATUS_LABELS[stockLatest.trade.status] ?? stockLatest.trade.status)}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
         <div className="notes">
-          <div>数据来源：{resp?.sourceLabel ?? kline.data?.sourceLabel ?? DASH}</div>
+          <div>数据来源：{resp?.sourceLabel ?? active.data?.sourceLabel ?? DASH}</div>
+          {isIntraday && (
+            <div className="warn-text">
+              分时走腾讯当日分钟序列，仅含<b>当日</b>数据；盘后或休市时段可能返回空，属正常现象，不会用模拟数据填补。
+            </div>
+          )}
           {isMinute && (
             <div className="warn-text">
               分钟线走 AkShare（东财）通道，该通道在本机<b>间歇性可达</b>（已内置 6 次代理/直连交替重试）。
               若下方显示获取失败，请稍后重试或切回日K；不会用模拟数据填补。
             </div>
           )}
-          {kline.data?.notes?.map((n) => <div key={n}>{n}</div>)}
+          {active.data?.notes?.map((n) => <div key={n}>{n}</div>)}
         </div>
 
       {deepOpen && (

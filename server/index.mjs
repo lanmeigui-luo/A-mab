@@ -19,6 +19,7 @@ import * as sina from './sources/sina.mjs';
 import * as rankSrc from './sources/sina_rank.mjs';
 import { runScreen, getCachedCtx, ensureCtx } from './screen.mjs';
 import { isKlineBatchValid } from './klineValidate.mjs';
+import { startScheduler, listSnapshotDates, readSnapshot } from './winrateSnapshot.mjs';
 import { STRATEGY_DEFS } from './strategies/index.mjs';
 import { evaluateStrategies, scoreCandidate, computeIndicators, inferLimitUp } from './strategies/index.mjs';
 import { buildTradePlan } from './strategies/tradeplan.mjs';
@@ -945,6 +946,21 @@ async function marketTurnover() {
       return json(res, 200, data);
     }
 
+    // 收盘快照（口径 A）：列出有快照的日期，供前端补拉缺失日
+    if (p === '/api/winrate-snapshot-dates') {
+      const dates = await listSnapshotDates();
+      return json(res, 200, { ok: true, dates });
+    }
+
+    // 收盘快照（口径 A）：拉单日快照，前端转为 WinRateRecord（priceSource='close'）
+    if (p === '/api/winrate-snapshot') {
+      const date = url.searchParams.get('date');
+      if (!date) return json(res, 400, { ok: false, reason: '缺少 date 参数' });
+      const snap = await readSnapshot(date);
+      if (!snap) return json(res, 404, { ok: false, reason: '该日期无收盘快照' });
+      return json(res, 200, { ok: true, snapshot: snap });
+    }
+
     return json(res, 404, { error: 'not found: ' + p });
   } catch (err) {
     return json(res, 502, {
@@ -959,4 +975,6 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('[radar-server] http://127.0.0.1:' + PORT);
   console.log('[radar-server] 主数据源: 通达信（pytdx 直连，tdx/server.py:8789）');
   console.log('[radar-server] 补充源: 腾讯财经（名称/换手率/市值/PE）· 备用降级: 腾讯 → 新浪');
+  // 收盘快照定时器（口径 A）：每日 15:05-15:10 触发，弥补浏览器未打开时的漏记录
+  startScheduler(() => HOLIDAYS);
 });

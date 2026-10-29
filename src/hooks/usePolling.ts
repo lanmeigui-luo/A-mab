@@ -19,6 +19,7 @@ export function usePolling<T>(
   fetcher: () => Promise<T>,
   intervalMs: number,
   deps: unknown[] = [],
+  enabled = true,
 ): PollingState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +54,11 @@ export function usePolling<T>(
 
   useEffect(() => {
     alive.current = true;
+    // enabled=false：暂停轮询（如分时模式下不空轮询日K），保留已有数据
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     run();
 
     const schedule = () => {
@@ -75,7 +81,7 @@ export function usePolling<T>(
       document.removeEventListener('visibilitychange', onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ms, run, ...deps]);
+  }, [ms, run, enabled, ...deps]);
 
   const setIntervalMs = useCallback((v: number) => setMs(v), []);
 

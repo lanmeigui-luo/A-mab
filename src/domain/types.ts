@@ -69,18 +69,29 @@ export interface KlineResponse {
 }
 
 export interface MinuteRow {
+  /** 时间，格式 HHMM，如 "0930" */
   time: string;
+  /** 当前价 */
   price: number;
-  volume: number;
+  /** 累计成交量（手），后端直供 */
+  cumVolume: number;
+  /** 累计成交额（元），后端直供 */
+  cumAmount: number;
+  /** 分时均价（元），后端自算（累计成交额 / 累计股数） */
   avg: number | null;
+  /** 每分钟增量成交量（手），前端由 cumVolume 差分得到，用于分时副图 */
+  vol: number;
 }
 
 export interface MinuteResponse {
   rows: MinuteRow[];
   source: string;
+  /** 前端友好的数据源标签（腾讯分时） */
+  sourceLabel: string;
   date: string;
   elapsedMs: number;
   fetchedAt: string;
+  notes: string[];
 }
 
 export interface MarketStats {

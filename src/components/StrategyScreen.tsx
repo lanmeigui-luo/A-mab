@@ -8,8 +8,11 @@ import type {
   StrategyDef,
   TradePlan,
 } from '@/domain/strategy';
+import type { WinRateStats } from '@/domain/winrate';
 import { changeColor, formatPct } from '@/lib/market-colors';
 import { DASH, fmtNum } from '@/lib/format';
+import { useWinRateStore } from '@/hooks/useWinRateStore';
+import { computeWinRateStats } from '@/lib/winrate-stats';
 
 interface Props {
   strategies: StrategyDef[];
@@ -259,6 +262,20 @@ export function StrategyScreen({
     return m;
   }, [rows]);
 
+  // P5a：战法卡片联动「近1月胜率」—— 复用 computeWinRateStats，按 dateFrom=今日-1月过滤
+  const wr = useWinRateStore();
+  const oneMonthAgo = useMemo(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return d.toISOString().slice(0, 10);
+  }, []);
+  const winRateByStrategy = useMemo(() => {
+    const res = computeWinRateStats(wr.records, { dateFrom: oneMonthAgo, excludeAnomaly: true });
+    const m = new Map<string, WinRateStats>();
+    for (const st of res.byStrategy) m.set(st.strategyId, st);
+    return m;
+  }, [wr.records, oneMonthAgo]);
+
   // 可选板块（来自命中结果），用于按板块筛选（需求第六章末）
   const boardOptions = useMemo(() => {
     const set = new Set<string>();
@@ -322,6 +339,7 @@ export function StrategyScreen({
               const on = selected.includes(s.id);
               const disabled = s.available === false;
               const st = statByStrategy.get(s.id);
+              const wrStat = winRateByStrategy.get(s.id);
               const openThis = paramOpen === s.id;
               const overrides = params[s.id] ?? {};
               const paramKeys = Object.keys(s.params ?? {}).filter((k) => PARAM_LABELS[k]);
@@ -348,6 +366,18 @@ export function StrategyScreen({
                       </div>
                     )}
                     {s.winRateNote && <div className="sc-rate">参考胜率 {s.winRateNote}</div>}
+                    {!disabled &&
+                      (wrStat ? (
+                        wrStat.insufficientSample ? (
+                          <div className="sc-rate muted">近1月胜率：样本不足</div>
+                        ) : (
+                          <div className="sc-rate">
+                            近1月胜率：{(wrStat.winRate! * 100).toFixed(0)}%（样本{wrStat.closed}）
+                          </div>
+                        )
+                      ) : (
+                        <div className="sc-rate muted">近1月胜率：暂无记录</div>
+                      ))}
                     <div className="sc-stat">
                       {disabled ? (
                         <span className="muted">—</span>

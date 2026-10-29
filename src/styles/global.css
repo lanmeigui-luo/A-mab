@@ -1184,6 +1184,352 @@ button.idx-card:hover {
   color: #047857;
 }
 
+/* ---------- 战法胜率页面（P3） ---------- */
+.wr-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.wr-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 20px;
+  align-items: flex-end;
+}
+.wr-fgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wr-fgroup.wr-grow {
+  flex: 1;
+  min-width: 320px;
+}
+.wr-flabel {
+  font-size: 12px;
+  color: var(--muted);
+}
+.wr-src-box {
+  background: var(--accent-soft);
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.wr-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wr-chip {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text-2);
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.wr-chip.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.wr-caliber {
+  margin: 14px 0 0;
+  line-height: 1.7;
+}
+
+.wr-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: 12px;
+}
+.wr-ov {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wr-ov-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wr-ov-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.wr-ov-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.wr-ov-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wr-ov-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.wr-ov-value {
+  font-size: 18px;
+  font-weight: 700;
+}
+.wr-mixed-tag {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--warn);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.wr-ov-note {
+  font-size: 11px;
+  color: var(--muted-2);
+}
+.wr-ov-split {
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+/* 「全部」口径：主胜率按盘中尾盘 / 收盘并排展示（不池化） */
+.wr-ov-win-split {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.wr-ov-win-k {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.wr-ov-win-sep {
+  color: var(--muted);
+}
+.wr-ov-sub {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--warn);
+  margin-top: 1px;
+}
+
+/* 收益正负配色：正收益绿、负收益红（与涨跌方向相反，语义为盈亏） */
+.ret-pos { color: #16a34a; }
+.ret-neg { color: #dc2626; }
+.cb-mode .ret-pos { color: #1d4ed8; }
+.cb-mode .ret-neg { color: #b45309; }
+
+.wr-rank {
+  display: flex;
+  flex-direction: column;
+}
+.wr-rank-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.wr-rank-row:last-child { border-bottom: none; }
+.wr-rank-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wr-rank-no {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted-2);
+  width: 22px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.wr-rank-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.wr-rank-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+.wr-rank-win {
+  font-weight: 700;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.wr-rank-split {
+  color: var(--muted-2);
+}
+
+.wr-table-toolbar {
+  margin-bottom: 10px;
+}
+.wr-th-sort {
+  cursor: pointer;
+  user-select: none;
+}
+.wr-th-sort:hover {
+  color: var(--accent);
+}
+.wr-stock {
+  font-weight: 600;
+}
+.wr-code {
+  font-size: 11px;
+  color: var(--muted-2);
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.wr-anom {
+  font-size: 12px;
+  color: var(--warn);
+  max-width: 220px;
+}
+.wr-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.wr-status-open { background: #eef2ff; color: var(--accent); }
+.wr-status-closed { background: #f3f4f6; color: var(--muted); }
+.wr-status-invalid { background: #f3f4f6; color: var(--muted-2); }
+.wr-status-anomaly { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); }
+
+.wr-empty {
+  text-align: left;
+  border-radius: 10px;
+}
+
+/* ---------- P4 图表层（全自绘 SVG） ---------- */
+.wr-chart {
+  width: 100%;
+}
+.wr-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+/* SVG 内文字（坐标轴 / 柱顶 / n 标签） */
+.wr-chart-axis {
+  font-size: 11px;
+  fill: var(--muted);
+  font-family: inherit;
+}
+.wr-chart-barlabel {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--text-2);
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.wr-chart-n {
+  font-size: 10px;
+  fill: var(--muted-2);
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.wr-chart-insufficient {
+  font-size: 9px;
+  fill: var(--warn);
+  font-family: inherit;
+}
+/* 图例 */
+.wr-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.wr-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.wr-chart-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  border: 2px solid;
+  box-sizing: content-box;
+}
+.wr-chart-note {
+  font-size: 11px;
+  color: var(--muted-2);
+}
+/* 空数据占位 */
+.wr-chart-empty {
+  padding: 48px;
+  text-align: center;
+  color: var(--muted-2);
+  font-size: 13px;
+  background: #fafafa;
+  border-radius: 10px;
+}
+/* 卖出原因分布：并排两列 */
+.wr-chart-dist-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.wr-chart-dist-col {
+  flex: 1;
+  min-width: 320px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+.wr-chart-dist-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.wr-disclaimer {
+  background: #f9fafb;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
 /* 战法卡上的时间窗与参考胜率 */
 .sc-window {
   font-size: 11px;
@@ -1324,4 +1670,151 @@ button.idx-card:hover {
   .detail-panel {
     width: 100vw !important;
   }
+}
+
+/* ===== 通用弹层（modal-mask / modal / modal-head：DataBackup 与 P5b 详情共用） ===== */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 24px;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  width: 100%;
+  max-width: 820px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.modal-head .spacer {
+  flex: 1;
+}
+
+/* ===== P5b 单笔交易详情弹层 ===== */
+.wr-detail-modal {
+  max-width: 860px;
+}
+.wr-detail-body {
+  overflow-y: auto;
+  padding: 16px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.wr-detail-basic {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px 18px;
+  margin-bottom: 12px;
+}
+.wr-detail-basic > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wr-detail-basic > div > span {
+  font-size: 12px;
+  color: var(--muted);
+}
+.wr-detail-basic > div > strong {
+  font-size: 14px;
+}
+.wr-score-total {
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+.wr-score-total strong {
+  font-size: 18px;
+  color: var(--accent);
+  margin-left: 4px;
+}
+.wr-factors {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wr-factor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wr-factor-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.wr-factor-name {
+  font-weight: 600;
+}
+.wr-factor-score {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.wr-factor-bar {
+  height: 8px;
+  background: #eef0f3;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.wr-factor-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+}
+.wr-factor-detail {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.wr-mini-kline {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #fbfcfe;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.wr-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wr-rule-row {
+  display: flex;
+  gap: 12px;
+  font-size: 14px;
+}
+.wr-rule-row > span:first-child {
+  width: 84px;
+  flex: none;
+  color: var(--muted);
+}
+
+/* 明细表行可点击（P5b） */
+.wr-row-click {
+  cursor: pointer;
+}
+.wr-row-click:hover {
+  background: var(--accent-soft);
 }

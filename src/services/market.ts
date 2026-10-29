@@ -3,12 +3,14 @@ import type {
   KlineResponse,
   MarketStats,
   MinuteResponse,
+  MinuteRow,
   QuoteResponse,
   SentimentStats,
   TurnoverStats,
 } from '@/domain/types';
 import type { BoardConsResponse, BoardListResponse, BoardType } from '@/domain/board';
 import type { ScreenResponse, StrategyDef, StrategyHit, TradePlan, ScoreResult } from '@/domain/strategy';
+import type { WinRateSnapshot } from '@/domain/winrate';
 
 /** 能力矩阵（阶段 0 产物）的数据形状，只声明 UI 需要的字段 */
 export interface CapabilityMatrixData {
@@ -98,7 +100,27 @@ export const marketApi = {
     get<KlineResponse>(
       `/api/kline?code=${encodeURIComponent(code)}&period=${period}&fq=${fq}&count=${count}`,
     ),
-  minute: (code: string) => get<MinuteResponse>('/api/minute?code=' + encodeURIComponent(code)),
+  /** 分时（腾讯当日分钟序列）。code 为带市场前缀的 fullCode，如 sh600519 */
+  minute: async (code: string): Promise<MinuteResponse> => {
+    const raw = await get<MinuteResponse>('/api/minute?code=' + encodeURIComponent(code));
+    const src = raw.rows as unknown as Array<{
+      time: string;
+      price: number;
+      cumVolume: number;
+      cumAmount: number;
+      avg: number | null;
+    }>;
+    const rows: MinuteRow[] = src.map((x, i) => ({
+      time: x.time,
+      price: x.price,
+      cumVolume: x.cumVolume,
+      cumAmount: x.cumAmount,
+      avg: x.avg,
+      // 增量成交量 = 当前累计量 − 前一根累计量（首根为 0）
+      vol: i > 0 ? Math.max(0, x.cumVolume - src[i - 1].cumVolume) : 0,
+    }));
+    return { ...raw, rows, sourceLabel: '腾讯分时' };
+  },
   marketStats: () => get<MarketStats>('/api/market-stats'),
   sentiment: () => get<SentimentStats>('/api/sentiment'),
   turnover: () => get<TurnoverStats>('/api/turnover'),
@@ -140,4 +162,14 @@ export const marketApi = {
     if (!hasParams) return get<ScreenResponse>('/api/screen?' + ps.toString());
     return post<ScreenResponse>('/api/screen?' + ps.toString(), { params: opts.params });
   },
+
+  /** 收盘快照（口径 A）：列出有快照的日期，供前端补拉缺失日 */
+  winrateSnapshotDates: () =>
+    get<{ ok: boolean; dates: string[] }>('/api/winrate-snapshot-dates'),
+
+  /** 收盘快照（口径 A）：拉单日快照，前端转为 WinRateRecord（priceSource='close'） */
+  winrateSnapshot: (date: string) =>
+    get<{ ok: boolean; snapshot: WinRateSnapshot } | { ok: false; reason: string }>(
+      '/api/winrate-snapshot?date=' + encodeURIComponent(date),
+    ),
 };

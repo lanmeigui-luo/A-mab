@@ -8,10 +8,12 @@ import { BoardPage } from '@/components/BoardPage';
 import { CapabilityMatrix } from '@/components/CapabilityMatrix';
 import { DataBackup } from '@/components/DataBackup';
 import { ModelSettings } from '@/components/ModelSettings';
+import { WinRateScreen } from '@/components/WinRateScreen';
 import { usePolling } from '@/hooks/usePolling';
 import { useWatchList } from '@/hooks/useWatchList';
 import { useStrategyParams } from '@/hooks/useStrategyParams';
 import { useColorBlind } from '@/hooks/useColorBlind';
+import { useWinRateRecorder } from '@/hooks/useWinRateRecorder';
 import { marketApi } from '@/services/market';
 import { INDEX_DEFS } from '@/domain/types';
 import type { BoardType } from '@/domain/board';
@@ -19,7 +21,7 @@ import type { ScreenResponse, StrategyDef } from '@/domain/strategy';
 
 const INDEX_CODES = INDEX_DEFS.map((d) => d.code);
 
-type TabKey = 'watch' | 'strategy' | 'board' | 'capability';
+type TabKey = 'watch' | 'strategy' | 'board' | 'capability' | 'winrate';
 
 export default function App() {
   const [tab, setTab] = useState<TabKey>('watch');
@@ -58,6 +60,13 @@ export default function App() {
   const wl = useWatchList();
   const sp = useStrategyParams();
   const cb = useColorBlind();
+
+  // P2b 修复：应用打开即跑一次每日周期（记录/结算）。
+  // 此前该调用点从未落地，导致 winrate Tab 始终 recordsLength=0（仅窗口命中时才可能因别处触发，实际没有任何调用点）。
+  const recorder = useWinRateRecorder();
+  useEffect(() => {
+    recorder.runDailyCycle().catch(() => undefined);
+  }, [recorder.runDailyCycle]);
   const [detail, setDetail] = useState<{ fullCode: string; name: string } | null>(null);
 
   const watchQuotes = usePolling(
@@ -147,6 +156,9 @@ export default function App() {
           <button className={`tab ${tab === 'capability' ? 'on' : ''}`} onClick={() => setTab('capability')}>
             数据源矩阵
           </button>
+          <button className={`tab ${tab === 'winrate' ? 'on' : ''}`} onClick={() => setTab('winrate')}>
+            战法胜率
+          </button>
           <span className="spacer" />
           <label className="check" title="用暖色（涨）/ 冷色（跌）替代红绿，便于红绿色盲辨识">
             <input type="checkbox" checked={cb.on} onChange={cb.toggle} />
@@ -199,6 +211,8 @@ export default function App() {
             source="AkShare（新浪板块）"
             onOpenKline={(fullCode, name) => setDetail({ fullCode, name })}
           />
+        ) : tab === 'winrate' ? (
+          <WinRateScreen />
         ) : (
           <CapabilityMatrix />
         )}
