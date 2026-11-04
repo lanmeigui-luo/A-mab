@@ -166,12 +166,14 @@ function computeStrategyStats(
       r.trade.holdDays == null,
   ).length;
 
-  // 有效交易 = closed 且无 anomaly（excludeAnomaly）
+  // 有效交易 = closed 且无 anomaly（excludeAnomaly）且未因日K歧义被排除分母
+  // （ambiguous_intraday 且 excludedFromStats=true 的记录不计入胜率/盈亏比，但仍可在明细表查看）
   const eligible = recs.filter(
     (r) =>
       r.trade.status === 'closed' &&
       r.trade.returnPct != null &&
       r.trade.sellPrice != null &&
+      !r.trade.excludedFromStats &&
       (!excludeAnomaly || r.trade.anomalies.length === 0),
   );
   const closed = eligible.length;
@@ -228,6 +230,18 @@ function computeStrategyStats(
   const maxProfitPct = winRets.length > 0 ? round2(Math.max(...winRets)) : null;
   const maxLossPct = lossRets.length > 0 ? round2(Math.min(...lossRets)) : null;
 
+  // 日K 歧义统计：ambiguous_intraday 笔数 / 总记录数（>20% 提示胜率置信度低）
+  const ambiguousTotal = recs.filter(
+    (r) => r.trade.status === 'closed' && r.trade.sellReason === 'ambiguous_intraday',
+  ).length;
+  const ambiguousExcluded = recs.filter(
+    (r) =>
+      r.trade.status === 'closed' &&
+      r.trade.sellReason === 'ambiguous_intraday' &&
+      r.trade.excludedFromStats === true,
+  ).length;
+  const ambiguityRate = total > 0 ? ambiguousTotal / total : null;
+
   return {
     strategyId,
     strategyName,
@@ -247,6 +261,8 @@ function computeStrategyStats(
     maxProfitPct,
     maxLossPct,
     unbucketedCount,
+    ambiguousExcluded,
+    ambiguityRate,
   };
 }
 

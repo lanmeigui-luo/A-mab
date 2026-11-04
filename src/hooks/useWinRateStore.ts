@@ -45,18 +45,40 @@ function getStorageOkSnapshot(): boolean {
   return storageOk;
 }
 
+/**
+ * 旧记录迁移：v1 时代已平仓记录的目标价成交口径有误（目标价被当固定成交价、忽略开盘跳空），
+ * 标 v1-legacy 并从胜率分母排除（不修改成交价，仅置 excludedFromStats=true，仍可在明细表查看）。
+ * 新规则（v2-t1-fix）或仍持仓（open）的记录不受影响。
+ */
+function migrateWinRateRecord(r: WinRateRecord): WinRateRecord {
+  const next: WinRateRecord = {
+    ...r,
+    insufficientHits: r.insufficientHits ?? false,
+    scoreFactors: r.scoreFactors ?? null,
+  };
+  if (next.trade?.status === 'closed' && next.trade.ruleVersion == null) {
+    next.trade = {
+      ...next.trade,
+      ruleVersion: 'v1-legacy',
+      invalidReason: '目标价成交口径错误（旧规则，已排除）',
+      excludedFromStats: true,
+    };
+  }
+  return next;
+}
+
 function read(): WinRateRecord[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const p = JSON.parse(raw) as Persisted;
     if (!p || p.version !== SCHEMA_VERSION || !Array.isArray(p.records)) return [];
-    // 仅保留结构合法、含 id / code / strategyId 的记录；旧数据缺 insufficientHits 时补默认 false
+    // 仅保留结构合法、含 id / code / strategyId 的记录；旧数据补默认字段并迁移旧规则记录
     return p.records
       .filter(
         (r) => r && typeof r.id === 'string' && typeof r.code === 'string' && typeof r.strategyId === 'string',
       )
-      .map((r) => ({ ...r, insufficientHits: r.insufficientHits ?? false, scoreFactors: r.scoreFactors ?? null }));
+      .map((r) => migrateWinRateRecord(r));
   } catch {
     return [];
   }
@@ -173,7 +195,7 @@ export function useWinRateStore() {
         .filter(
           (r) => r && typeof r.id === 'string' && typeof r.code === 'string' && typeof r.strategyId === 'string',
         )
-        .map((r) => ({ ...r, insufficientHits: r.insufficientHits ?? false, scoreFactors: r.scoreFactors ?? null }));
+        .map((r) => migrateWinRateRecord(r));
       if (cleaned.length === 0) {
         return { ok: false, reason: '无有效记录', added: 0, updated: 0, skipped: 0, total: 0 };
       }

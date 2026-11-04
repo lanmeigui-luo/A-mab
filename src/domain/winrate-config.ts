@@ -33,6 +33,15 @@ export interface StrategyWinRateConfig {
 export const STRATEGY_PARAM_VERSION = '2026-09-28';
 
 /**
+ * 结算规则版本（v2-t1-fix 起）：标识交易模拟引擎的卖出判定口径。
+ *  - v1-legacy：旧规则，目标价被当作固定成交价、忽略开盘跳空，口径有误，已迁移排除分母。
+ *  - v2-t1-fix：T+1 可卖日按「先判双边歧义 → 开盘跳空 → 盘中单边 → 到期」优先级，
+ *    谁先触发谁成交（按时间，不采用止损优先保守假设）；开盘跳空按开盘价成交。
+ * 落库于 TradeRecord.ruleVersion / WinRateRecord.ruleVersion，供统计层区分新旧记录、明细表展示。
+ */
+export const TRADE_RULE_VERSION = 'v2-t1-fix';
+
+/**
  * 记录窗口截止时刻（HH:MM，本地时区）。P2b 短期方案：仅在该窗口（14:50-15:00 交易时段内）
  * 应用打开才触发当日信号记录；窗口外只结算历史 open 记录，不做新记录。
  * 15:00 后打开且当日无记录 → 当日标记「待后端快照」（见 useWinRateRecorder.getPendingDays），不写假记录。
@@ -110,4 +119,30 @@ export function listEnabledStrategies(): StrategyWinRateConfig[] {
 /** 无法映射 / 未接入的战法（供汇报缺失项） */
 export function listUnmappedStrategies(): StrategyWinRateConfig[] {
   return Object.values(WINRATE_STRATEGY_CONFIG).filter((c) => !c.enabled || c.holdDays === null);
+}
+
+/**
+ * 买卖计划参数冲突校验：合规区间必须满足
+ *   stop < buyLow ≤ buyHigh < target1 < target2
+ * 任一为 null（未知）则视为不可校验 → 返回 ok（不拦截，交结算逻辑降级处理）。
+ * 违规返回 ok=false 并附中文 reason。记录引擎在落库前调用：违规的 tradePlan 不生成该记录。
+ */
+export function validateWinRateParams(
+  stop: number | null,
+  buyLow: number | null,
+  buyHigh: number | null,
+  target1: number | null,
+  target2: number | null,
+): { ok: boolean; reason?: string } {
+  if ([stop, buyLow, buyHigh, target1, target2].some((v) => v == null)) return { ok: true };
+  const s = stop as number;
+  const bl = buyLow as number;
+  const bh = buyHigh as number;
+  const t1 = target1 as number;
+  const t2 = target2 as number;
+  if (!(s < bl)) return { ok: false, reason: '止损价须低于买入区间下限' };
+  if (!(bl <= bh)) return { ok: false, reason: '买入区间下限须 ≤ 上限' };
+  if (!(bh < t1)) return { ok: false, reason: '买入区间上限须低于目标一' };
+  if (!(t1 < t2)) return { ok: false, reason: '目标一须低于目标二' };
+  return { ok: true };
 }

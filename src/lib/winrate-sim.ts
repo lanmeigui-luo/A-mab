@@ -33,15 +33,27 @@
  *   fq='none'；通达信通道默认 qfq。若上游传入的是 qfq 日 K，除权日附近涨停判定可能有误差，
  *   本引擎对此不修正，仅在此声明已知限制。
  *
- * 【卖出判定（从 T+1 逐根扫描）】每根 K 线按优先级判定（同日多条件「止损优先 / 保守优先」）：
- *   1) 止损：day.low <= stop → 以止损价成交（若开盘已低于止损则按开盘价，缺口优先），reason='stop_loss'
- *   2) 目标1：day.high >= target1 → 以 target1 成交，reason='target1'
- *   3) 目标2：day.high >= target2 → 以 target2 成交，reason='target2'
- *   4) 持有周期到期：到达 holdDays.max 交易日 → 以当日收盘价成交，reason='hold_expired'
- *   同根内多条件命中时，按 1>2>3>4 顺序取最先命中者（止损优先，避免把本应止损的交易日误判为盈利）。
+ * 【卖出判定（从 T+1 首可卖日逐根扫描）】每根可卖日 K 线按「时间优先级」判定（谁先触发谁成交）：
+ *   ⚠️ 日K 仅 OHLC，无法判定「盘中 high 与 low 的先后」，故分两层降级处理（非「止损优先」保守假设）：
+ *   ① 开盘跳空（时间上最早发生，优先级最高）：open≤stop→stop_gap；open≥target2→target2_gap；open≥target1→target1_gap
+ *        （按开盘价成交，任意可卖日含 T+1 首可卖日；开盘即触及，无需分时数据判定盘中先后）。
+ *   ② 开盘未跳空、且仅首可卖日检查「买入当日(T日)是否已有触发标记」（成交按首可卖日开盘价，计入分母）：
+ *        T日双边都触 → ambiguous_intraday（仅原因歧义，excludedFromStats=false）；
+ *        T日单边(止损/目标) → tplus1_stop_loss / tplus1_target1 / tplus1_target2。
+ *   ③ 盘中（开盘未触发、首可卖日无 T日标记、或非首可卖日）：
+ *        双边触及（low≤stop 且 high≥target1）→ ambiguous_intraday（默认 excludedFromStats=true，排除分母）；
+ *        单边 → low≤stop→stop_loss；high≥target2→target2；high≥target1→target1（按对应价成交）。
+ *   ④ 持有周期到期：到达 holdDays.max 交易日 → 以当日收盘价成交，reason='hold_expired'。
  *
- * 【买入当日收盘跌破止损】buyDay.close < stop → 次日（T+1）开盘价强制卖出，reason='stop_loss'。
- *   （这是独立于上方逐根扫描的「盘前已知水下」路径：买入当天收盘已破位，次日开盘平仓。）
+ * 【买入当日（T日）触发 与 T+1 首可卖日 关系】
+ *   - T日单边触发 + T+1 首可卖日开盘未跳空 → tplus1_*（按首可卖日开盘价成交，计入分母）。
+ *   - T日双边都触 + T+1 首可卖日开盘未跳空 → ambiguous_intraday（excludedFromStats=false，仅原因歧义，计入分母）。
+ *   - T+1 首可卖日开盘跳空（无论 T日是否触发）→ *_gap（开盘第一时间成交，计入分母，不标歧义）。
+ *   - T+1 首可卖日停牌 → 顺延到下一可交易日，仍按上述规则（顺延后的首可交易日视为「首可卖日」执行 ②）。
+ *
+ * 【买入当日收盘跌破止损】buyDay.close < stop → 次日（T+1）首可卖日开盘价强制卖出，reason='tplus1_stop_loss'。
+ *   （这是独立于上方逐根扫描的「盘前已知水下」路径：买入当天收盘已破位，次日开盘平仓；
+ *    优先级位于 ①开盘跳空 之后、②T日触发标记 tplus1_* 之前；不论 T日是否同时触目标，一律走此路径，不得走 ambiguous_intraday。）
  *   注：此路径目前不追加新的 anomaly key（现有枚举无精确对应项），仅以 sellReason='stop_loss' 记录；
  *       如需独立异常标记请在 anomaly 枚举补充后接入（见最终汇报「待确认」）。
  *
@@ -60,7 +72,8 @@
  */
 
 import type { WinRateRecord, TradeRecord, WinRateAnomaly, SellReason } from '../domain/winrate';
-import type { KlineRow } from '../domain/types';
+import type { KlineRow, MinuteRow } from '../domain/types';
+import { TRADE_RULE_VERSION } from '../domain/winrate-config';
 
 export interface SimSuspensionRange {
   from: string; // YYYY-MM-DD 含
@@ -72,6 +85,13 @@ export interface SimOptions {
   suspensionRanges?: SimSuspensionRange[];
   /** ST 状态；缺省由 record.name 前缀(ST/*ST)推导 */
   isST?: boolean;
+  /**
+   * 【预留】分钟线数据：接入后按时间戳判定「盘中 high/low 先后」，消除日K歧义（ambiguous_intraday）。
+   * 当前（选 A 纯日K降级）不传、不实现按时间分支；引擎仅依据日K OHLC 做降级判定。
+   * 未来接 B 时：此处传入 `dailyK[i]` 对应的当日分钟序列，在 ③盘中双边歧义 / ④盘中单边 判定处
+   * 改为「先到者成交」，并移除 ambiguous_intraday 的排除/标注。
+   */
+  minuteBars?: MinuteRow[];
 }
 
 export interface SimResult {
@@ -160,6 +180,8 @@ export function simulateTrade(
   }
 
   // 重新模拟：清空旧执行结果，保留 backfilled 标记
+  // 重算记录统一打当前规则版本（已平仓记录已在上方提前返回，保留其自身版本，不被覆盖）
+  trade.ruleVersion = TRADE_RULE_VERSION;
   const baseBackfilled = trade.backfilled;
   Object.assign(trade, {
     buyDate: null,
@@ -202,6 +224,11 @@ export function simulateTrade(
 
   const buyDayK = dailyK[buyIdx];
 
+  // 买入当日开盘价已 ≥ 目标一：计划失效（无法以低于目标的价格入场）→ 未成交。
+  // 优先级高于普通「高开未成交」：open≥target1 一定意味着 open>buyHigh（参数校验保证 bugh<t1），
+  // 故此处先判定，使 high_open_over_target1 这个专属异常可被触发（否则会被 high_open_unfilled 抢先返回）。
+  const overTarget1 = record.target1 != null && buyDayK.open >= record.target1;
+
   if (!skipLimitUpCheck) {
     const prevK = dailyK[buyIdx - 1];
     if (prevK) {
@@ -222,7 +249,15 @@ export function simulateTrade(
         trade.anomalies = ['limit_up_unfilled'];
         return { trade, tPlus1SellDate: null };
       }
-      // 高开未成交
+      if (overTarget1) {
+        trade.status = 'invalid';
+        trade.buyDate = buyDayK.date;
+        trade.buyPrice = null;
+        trade.sellReason = 'unknown';
+        trade.anomalies = ['high_open_over_target1'];
+        return { trade, tPlus1SellDate: null };
+      }
+      // 高开未成交（仅高于买入区间上限，但低于目标一）
       if (record.buyHigh != null && buyDayK.open > record.buyHigh) {
         trade.status = 'invalid';
         trade.buyDate = buyDayK.date;
@@ -232,14 +267,24 @@ export function simulateTrade(
         return { trade, tPlus1SellDate: null };
       }
     }
-  } else if (record.buyHigh != null && buyDayK.open > record.buyHigh) {
+  } else {
+    if (overTarget1) {
+      trade.status = 'invalid';
+      trade.buyDate = buyDayK.date;
+      trade.buyPrice = null;
+      trade.sellReason = 'unknown';
+      trade.anomalies = ['high_open_over_target1'];
+      return { trade, tPlus1SellDate: null };
+    }
     // 次新股：仅做普通高开未成交判定（不做一字板判定）
-    trade.status = 'invalid';
-    trade.buyDate = buyDayK.date;
-    trade.buyPrice = null;
-    trade.sellReason = 'unknown';
-    trade.anomalies = ['high_open_unfilled'];
-    return { trade, tPlus1SellDate: null };
+    if (record.buyHigh != null && buyDayK.open > record.buyHigh) {
+      trade.status = 'invalid';
+      trade.buyDate = buyDayK.date;
+      trade.buyPrice = null;
+      trade.sellReason = 'unknown';
+      trade.anomalies = ['high_open_unfilled'];
+      return { trade, tPlus1SellDate: null };
+    }
   }
 
   // 正常成交
@@ -258,17 +303,26 @@ export function simulateTrade(
     return { trade, tPlus1SellDate: null };
   }
 
-  // 买入当日收盘跌破止损 → 次日开盘价强制卖出（盘前已知水下，独立于逐根扫描）
-  const forcedEarlyExit = record.stop != null && buyDayK.close < record.stop;
-
   const stop = record.stop;
   const target1 = record.target1;
   const target2 = record.target2;
   const holdMax = record.holdDays?.max ?? null;
 
+  // 买入当日（T日，即 buyDay）是否已有触发标记（用于 T+1 首可卖日、且开盘未跳空时回退 tplus1_*）：
+  //  - 止损边：low≤stop
+  //  - 目标边：high≥target1 / high≥target2
+  const buyDayStopHit = stop != null && buyDayK.low <= stop;
+  const buyDayT2Hit = target2 != null && buyDayK.high >= target2;
+  const buyDayT1Hit = target1 != null && buyDayK.high >= target1;
+  const buyDayBothSide = buyDayStopHit && (buyDayT1Hit || buyDayT2Hit);
+  // 买入当日收盘已跌破止损（close<stop）：独立于盘中 low/high 的「盘后已知水下」信号
+  const buyDayCloseBelowStop = stop != null && buyDayK.close < stop;
+
   let sellDayIdx = -1;
   let sellPrice: number | null = null;
   let sellReason: SellReason = 'unknown';
+  let excluded = false;
+  let firstSellDayProcessed = false;
 
   for (let i = sellStartIdx; i < dailyK.length; i++) {
     const day = dailyK[i];
@@ -284,43 +338,116 @@ export function simulateTrade(
       continue;
     }
 
-    // 盘前水下：次日开盘价强制平仓
-    if (forcedEarlyExit) {
-      sellDayIdx = i;
-      sellPrice = day.open;
-      sellReason = 'stop_loss';
-      break;
-    }
+    // isFirstSellDay = 首个实际可交易日（跳过停牌/零量日后的第一根），T+1 跳空前缀仅作用于此日
+    const isFirstSellDay = !firstSellDayProcessed;
+    firstSellDayProcessed = true;
 
     const daysHeld = i - buyIdx; // 持有交易日数（buyDay → 当前日）
 
-    // 1) 止损（优先）
+    // ① 开盘跳空（时间上最早发生，优先级最高）：open 已越过触发价位 → 按开盘价成交。
+    //    任意可卖日（含 T+1 首可卖日）一律用 *_gap，不进入 tplus1_* / 歧义分支。
+    if (stop != null && day.open <= stop) {
+      sellDayIdx = i;
+      sellPrice = day.open;
+      sellReason = 'stop_gap';
+      excluded = false;
+      break;
+    }
+    if (target2 != null && day.open >= target2) {
+      sellDayIdx = i;
+      sellPrice = day.open;
+      sellReason = 'target2_gap';
+      excluded = false;
+      break;
+    }
+    if (target1 != null && day.open >= target1) {
+      sellDayIdx = i;
+      sellPrice = day.open;
+      sellReason = 'target1_gap';
+      excluded = false;
+      break;
+    }
+
+    // ② 开盘未跳空：仅首可卖日检查「买入当日(T日)触发标记」→ tplus1_* / 双边歧义(计入分母)
+    if (isFirstSellDay) {
+      // 买入当日收盘已跌破止损 → T+1 首可卖日开盘平仓，原因 tplus1_stop_loss（优先级高于双边歧义，不论当日是否同时触目标）
+      if (buyDayCloseBelowStop) {
+        sellDayIdx = i;
+        sellPrice = day.open;
+        sellReason = 'tplus1_stop_loss';
+        excluded = false;
+        break;
+      }
+      if (buyDayStopHit || buyDayT2Hit || buyDayT1Hit) {
+        if (buyDayBothSide) {
+          sellDayIdx = i;
+          sellPrice = day.open; // 成交价确定（首可卖日开盘），仅原因歧义
+          sellReason = 'ambiguous_intraday';
+          excluded = false; // 计入分母
+          break;
+        }
+        if (buyDayStopHit) {
+          sellDayIdx = i;
+          sellPrice = day.open;
+          sellReason = 'tplus1_stop_loss';
+          excluded = false;
+          break;
+        }
+        if (buyDayT2Hit) {
+          sellDayIdx = i;
+          sellPrice = day.open;
+          sellReason = 'tplus1_target2';
+          excluded = false;
+          break;
+        }
+        // buyDayT1Hit 且非双边、非止损边
+        sellDayIdx = i;
+        sellPrice = day.open;
+        sellReason = 'tplus1_target1';
+        excluded = false;
+        break;
+      }
+    }
+
+    // ③ 盘中双边触及（日K 仅 OHLC，无法判定盘中 high/low 先后）→ 歧义，排除分母
+    const dayBothSide = stop != null && day.low <= stop && target1 != null && day.high >= target1;
+    if (dayBothSide) {
+      sellDayIdx = i;
+      sellPrice = day.open; // 代表成交价仅用于展示（已排除分母）
+      sellReason = 'ambiguous_intraday';
+      excluded = true;
+      break;
+    }
+
+    // ④ 盘中单边（开盘未触发，盘中才触及）
     if (stop != null && day.low <= stop) {
-      const fill = day.open < stop ? day.open : stop; // 缺口下破按开盘价，否则按止损价
       sellDayIdx = i;
-      sellPrice = fill;
+      sellPrice = day.open < stop ? day.open : stop; // 缺口下破按开盘价，否则按止损价
       sellReason = 'stop_loss';
+      excluded = false;
       break;
     }
-    // 2) 目标1
-    if (target1 != null && day.high >= target1) {
-      sellDayIdx = i;
-      sellPrice = target1;
-      sellReason = 'target1';
-      break;
-    }
-    // 3) 目标2
     if (target2 != null && day.high >= target2) {
       sellDayIdx = i;
       sellPrice = target2;
       sellReason = 'target2';
+      excluded = false;
       break;
     }
-    // 4) 持有周期到期
+    if (target1 != null && day.high >= target1) {
+      sellDayIdx = i;
+      sellPrice = target1;
+      sellReason = 'target1';
+      excluded = false;
+      break;
+    }
+
+    // ⑤ 持有周期到期（按战法持有上限自动了结）
     if (holdMax != null && daysHeld >= holdMax) {
       sellDayIdx = i;
       sellPrice = day.close;
       sellReason = 'hold_expired';
+      excluded = false;
       break;
     }
   }
@@ -343,6 +470,8 @@ export function simulateTrade(
   trade.sellReason = sellReason;
   trade.status = 'closed';
   trade.anomalies = anomalies;
+  trade.excludedFromStats = excluded;
+  trade.ruleVersion = TRADE_RULE_VERSION;
 
   return { trade, tPlus1SellDate };
 }

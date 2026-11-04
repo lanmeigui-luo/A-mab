@@ -4,6 +4,8 @@ import {
   SELL_REASON_LABELS,
   TRADE_STATUS_LABELS,
   ANOMALY_LABELS,
+  tradeTriggerPrice,
+  tradeRuleNote,
 } from '../domain/winrate';
 
 type SortKey = 'date' | 'strategyName' | 'returnPct';
@@ -98,13 +100,16 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                 <th>股票</th>
                 <th className="num">买入价</th>
                 <th className="num">卖出价</th>
+                <th className="num">触发价</th>
                 <th className="num">持有天数</th>
                 <th className="num wr-th-sort" onClick={() => toggleSort('returnPct')}>
                   收益率{sortMark('returnPct')}
                 </th>
                 <th>卖出原因</th>
+                <th>执行规则</th>
                 <th>状态</th>
                 <th>异常标注</th>
+                <th>标记</th>
               </tr>
             </thead>
             <tbody>
@@ -130,6 +135,12 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                     <td className="num mono">
                       {r.trade.sellPrice == null ? '—' : r.trade.sellPrice.toFixed(2)}
                     </td>
+                    <td className="num mono">
+                      {(() => {
+                        const tp = tradeTriggerPrice(r);
+                        return tp == null ? '—' : tp.toFixed(2);
+                      })()}
+                    </td>
                     <td className="num mono">{r.trade.holdDays == null ? '—' : r.trade.holdDays}</td>
                     <td
                       className={`num mono ${
@@ -139,12 +150,22 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                       {ret == null ? '—' : `${ret.toFixed(2)}%`}
                     </td>
                     <td>{SELL_REASON_LABELS[r.trade.sellReason]}</td>
+                    <td className="wr-rule-note">{tradeRuleNote(r)}</td>
                     <td>
                       <span className={`wr-status wr-status-${r.trade.status}`}>
                         {TRADE_STATUS_LABELS[r.trade.status]}
                       </span>
                     </td>
                     <td className="wr-anom">{anomalies || '—'}</td>
+                    <td className="wr-tags">
+                      {r.trade.excludedFromStats && <span className="chip warn">已排除分母</span>}
+                      {r.trade.sellReason === 'ambiguous_intraday' && (
+                        <span className="chip muted">歧义</span>
+                      )}
+                      {r.trade.ruleVersion === 'v1-legacy' && (
+                        <span className="chip muted">历史规则</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

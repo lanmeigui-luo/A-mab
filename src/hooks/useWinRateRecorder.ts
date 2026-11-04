@@ -38,6 +38,7 @@ import {
   listEnabledStrategies,
   getWinRateConfig,
   STRATEGY_PARAM_VERSION,
+  TRADE_RULE_VERSION,
   DEFAULT_RECORD_CUTOFF,
   type StrategyWinRateConfig,
 } from '../domain/winrate-config';
@@ -182,6 +183,7 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
         holdDays: cfg.holdDays,
         tPlus1SellDate: null, // 由结算逻辑重算
         paramVersion: cfg.paramVersion,
+        ruleVersion: TRADE_RULE_VERSION,
         backfilled: isHistorical,
         recordedAt,
         priceSource: 'close',

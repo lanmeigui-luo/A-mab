@@ -26,6 +26,9 @@ export function WinRateOverviewCard({ stats, priceSourceFilter }: Props) {
       <div className="wr-ov-head">
         <span className="wr-ov-name">{stats.strategyName}</span>
         {stats.insufficientSample && <span className="chip warn">样本不足·仅供参考</span>}
+        {stats.ambiguityRate != null && stats.ambiguityRate >= 0.2 && (
+          <span className="chip warn">日K回测歧义比例高，胜率置信度低，建议接入分钟数据</span>
+        )}
       </div>
 
       <div className="wr-ov-metrics">
@@ -89,6 +92,19 @@ export function WinRateOverviewCard({ stats, priceSourceFilter }: Props) {
       <div className="wr-ov-note">
         样本不足命中占比 {stats.insufficientHitsCount}/{stats.total}（{hitsPct}%）
       </div>
+
+      {stats.insufficientSample && (
+        <div className="wr-ov-note">
+          样本不足：有效交易 {stats.closed} 笔（&lt;10），胜率仅供参考
+        </div>
+      )}
+
+      {stats.ambiguityRate != null && stats.ambiguityRate > 0 && (
+        <div className="wr-ov-note">
+          因日K歧义排除 {stats.ambiguousExcluded} 笔（歧义比例{' '}
+          {Math.round(stats.ambiguityRate * 100)}%）
+        </div>
+      )}
 
       {stats.unbucketedCount > 0 && (
         <div className="wr-ov-note">

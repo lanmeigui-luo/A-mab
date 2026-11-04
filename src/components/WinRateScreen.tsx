@@ -72,7 +72,13 @@ class WinRateErrorBoundary extends Component<{ children: ReactNode }, { error: E
   }
 }
 
-function WinRateScreenInner() {
+function WinRateScreenInner({
+  onOpenKline,
+  onCloseKline,
+}: {
+  onOpenKline?: (fullCode: string, name: string) => void;
+  onCloseKline?: () => void;
+}) {
   const { records, storageOk } = useWinRateStore();
   const enabled = useMemo(() => listEnabledStrategies(), []);
   const enabledIds = useMemo(() => enabled.map((c) => c.strategyId), [enabled]);
@@ -198,6 +204,7 @@ function WinRateScreenInner() {
         <div className="alert warn wr-caliber">
           胜率基于历史模拟交易；intraday_late 为盘中尾盘记录，与 close
           收盘记录不可混算；样本不足10笔标注仅供参考。持有周期为累积上限桶（≤N天），持有天数为空的记录（未平仓/异常）不计入分布并单独计数。
+          卖出规则（v2-t1-fix）：A股T+1，买入后首个可交易日才能卖；目标价1/2为触发阈值，实际成交价按T+1可卖日真实开盘/盘中价执行（开盘跳空按开盘价、盘中单边按对应触发价）。日K仅OHLC无法判定盘中高低先后，可卖日双边触及标「日K歧义」并排除分母；歧义比例&gt;20%时该战法卡片标黄，胜率置信度低，建议接入分钟数据。
         </div>
       </div>
 
@@ -305,16 +312,29 @@ function WinRateScreenInner() {
         本应用仅供学习研究，不构成投资建议，股市有风险，入市需谨慎。胜率统计基于历史模拟，不代表未来收益。
       </div>
 
-      {/* 单笔交易详情弹层（P5b，纯展示） */}
-      <WinRateTradeDetailModal record={selectedRecord} onClose={() => setSelectedRecord(null)} />
+      {/* 单笔交易详情（P5b，纯展示，居中弹层） */}
+      <WinRateTradeDetailModal
+        record={selectedRecord}
+        onClose={() => {
+          setSelectedRecord(null);
+          onCloseKline?.();
+        }}
+        onOpenKline={onOpenKline}
+      />
     </div>
   );
 }
 
-export function WinRateScreen() {
+export function WinRateScreen({
+  onOpenKline,
+  onCloseKline,
+}: {
+  onOpenKline?: (fullCode: string, name: string) => void;
+  onCloseKline?: () => void;
+}) {
   return (
     <WinRateErrorBoundary>
-      <WinRateScreenInner />
+      <WinRateScreenInner onOpenKline={onOpenKline} onCloseKline={onCloseKline} />
     </WinRateErrorBoundary>
   );
 }

@@ -3,6 +3,8 @@ import type { WinRateRecord } from '@/domain/winrate';
 import {
   TRADE_STATUS_LABELS,
   SELL_REASON_LABELS,
+  tradeTriggerPrice,
+  tradeRuleNote,
 } from '@/domain/winrate';
 import { marketApi } from '@/services/market';
 import type { KlineResponse, KlineRow } from '@/domain/types';
@@ -164,15 +166,17 @@ function MiniKline({
 }
 
 /**
- * 单笔交易详情弹层（P5b，纯展示，绝不可修改记录）。
+ * 单笔交易详情（P5b，纯展示，绝不可修改记录；居中弹层）。
  * 三块纵向排列：A 基础信息 & 因子贡献 / B 交易点 K 线图 / C 战法规则说明。
  */
 export function WinRateTradeDetailModal({
   record,
   onClose,
+  onOpenKline,
 }: {
   record: WinRateRecord | null;
   onClose: () => void;
+  onOpenKline?: (fullCode: string, name: string) => void;
 }) {
   const [kline, setKline] = useState<KlineResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -231,6 +235,8 @@ export function WinRateTradeDetailModal({
   if (!record) return null;
 
   const ret = record.trade.returnPct;
+  const tp = tradeTriggerPrice(record);
+  const ruleNote = tradeRuleNote(record);
   const cfg = getWinRateConfig(record.strategyId);
   const factors = record.scoreFactors ?? [];
   const maxScore = factors.reduce((m, f) => (f.score == null ? m : Math.max(m, f.score)), 0) || 1;
@@ -240,12 +246,14 @@ export function WinRateTradeDetailModal({
       <div className="modal wr-detail-modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-head">
           <h3>交易详情</h3>
+          <span className="mono muted">
+            {record.name} · {record.code}
+          </span>
           <span className="spacer" />
           <button className="btn" onClick={onClose}>
             关闭
           </button>
         </header>
-
         <div className="wr-detail-body">
           {/* A. 基础信息 & 因子贡献 */}
           <section className="detail-section">
@@ -266,10 +274,26 @@ export function WinRateTradeDetailModal({
                 <strong className="mono">{record.date}</strong>
               </div>
               <div>
+                <span>买入日期</span>
+                <strong className="mono">{record.trade.buyDate ?? '—'}</strong>
+              </div>
+              <div>
+                <span>卖出日期</span>
+                <strong className="mono">{record.trade.sellDate ?? '未卖出'}</strong>
+              </div>
+              <div>
                 <span>状态</span>
                 <span className={`wr-status wr-status-${record.trade.status}`}>
                   {TRADE_STATUS_LABELS[record.trade.status]}
                 </span>
+              </div>
+              <div>
+                <span>买入价</span>
+                <strong className="mono">{record.trade.buyPrice == null ? '—' : '¥' + fmtNum(record.trade.buyPrice)}</strong>
+              </div>
+              <div>
+                <span>卖出价</span>
+                <strong className="mono">{record.trade.sellPrice == null ? '—' : '¥' + fmtNum(record.trade.sellPrice)}</strong>
               </div>
               <div>
                 <span>收益率</span>
@@ -280,7 +304,75 @@ export function WinRateTradeDetailModal({
               <div>
                 <span>卖出原因</span>
                 <strong>{SELL_REASON_LABELS[record.trade.sellReason]}</strong>
+                {onOpenKline && (
+                  <button
+                    className="btn primary"
+                    style={{ marginTop: 6 }}
+                    onClick={() => onOpenKline(toFullCode(record.code), record.name)}
+                  >
+                    打开个股K线
+                  </button>
+                )}
               </div>
+            </div>
+
+            {/* 记录日买卖计划（记录时生成，计划价；区别于上方实际成交的买入价/卖出价） */}
+            <div className="plan-box wr-plan-snapshot">
+              <div className="plan-head">记录日买卖计划（计划价）</div>
+              <div className="plan-grid">
+                <div>
+                  <span>买入区间</span>
+                  <strong className="mono">
+                    {record.buyLow != null && record.buyHigh != null
+                      ? `${fmtNum(record.buyLow)}~${fmtNum(record.buyHigh)}`
+                      : '—'}
+                  </strong>
+                </div>
+                <div>
+                  <span>止损价</span>
+                  <strong className="mono">{record.stop == null ? '—' : fmtNum(record.stop)}</strong>
+                </div>
+                <div>
+                  <span>目标一</span>
+                  <strong className="mono">{record.target1 == null ? '—' : fmtNum(record.target1)}</strong>
+                </div>
+                <div>
+                  <span>目标二</span>
+                  <strong className="mono">{record.target2 == null ? '—' : fmtNum(record.target2)}</strong>
+                </div>
+              </div>
+              <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                计划价于记录日生成，非实际成交价（实际买入/卖出价见上方基础信息）
+              </div>
+            </div>
+
+            {/* 执行规则说明：目标价1/2为触发阈值，实际成交价按 T+1 可卖日真实开盘/盘中价执行（复用 tradeTriggerPrice/tradeRuleNote） */}
+            <div className="plan-box wr-exec-note">
+              <div className="plan-head">执行规则说明</div>
+              <div className="wr-exec-desc">
+                目标价1/2为触发阈值，实际成交价按T+1可卖日真实开盘/盘中价执行：开盘跳空按开盘价成交，盘中单边按对应触发价成交（非固定目标价）。
+              </div>
+              <div className="plan-grid">
+                <div>
+                  <span>触发阈值价</span>
+                  <strong className="mono">{tp == null ? '—' : fmtNum(tp)}</strong>
+                </div>
+                <div>
+                  <span>实际成交价</span>
+                  <strong className="mono">
+                    {record.trade.sellPrice == null ? '—' : fmtNum(record.trade.sellPrice)}
+                  </strong>
+                </div>
+                <div>
+                  <span>规则/原因</span>
+                  <strong>{ruleNote}</strong>
+                </div>
+              </div>
+              {record.trade.ruleVersion === 'v1-legacy' && (
+                <div className="wr-exec-legacy">
+                  历史规则记录：{record.trade.invalidReason ?? '目标价成交口径错误（旧规则，已排除分母）'}
+                </div>
+              )}
             </div>
 
             <div className="wr-score-total">

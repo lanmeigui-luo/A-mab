@@ -84,6 +84,11 @@ body {
   color: var(--warn);
   border: 1px solid var(--warn-border);
 }
+.chip.muted {
+  background: #f3f4f6;
+  color: var(--muted-2);
+  border: 1px solid var(--border);
+}
 
 .spacer {
   flex: 1;
@@ -1409,6 +1414,33 @@ button.idx-card:hover {
   color: var(--warn);
   max-width: 220px;
 }
+.wr-rule-note {
+  font-size: 12px;
+  color: var(--muted-2);
+  max-width: 240px;
+  line-height: 1.4;
+}
+.wr-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.wr-exec-note {
+  margin-top: 12px;
+  border-left: 3px solid var(--accent);
+}
+.wr-exec-desc {
+  font-size: 12px;
+  color: var(--muted-2);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+.wr-exec-legacy {
+  font-size: 11px;
+  color: var(--warn);
+  margin-top: 6px;
+}
 .wr-status {
   font-size: 12px;
   padding: 2px 8px;
@@ -1647,7 +1679,9 @@ button.idx-card:hover {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  z-index: 60;
+  /* 置于居中弹层（.modal-mask z-index:200）之上：从交易详情弹层内打开个股K线时，
+     右侧 K 线面板需盖在弹层之上并可独立滚动 */
+  z-index: 300;
 }
 
 /* 左缘拖拽把手：可伸缩 */
@@ -1710,7 +1744,7 @@ button.idx-card:hover {
   flex: 1;
 }
 
-/* ===== P5b 单笔交易详情弹层 ===== */
+/* ===== P5b 单笔交易详情弹层（居中 modal，复用通用 .modal） ===== */
 .wr-detail-modal {
   max-width: 860px;
 }
@@ -1721,6 +1755,8 @@ button.idx-card:hover {
   flex-direction: column;
   gap: 16px;
 }
+
+/* ===== P5b 单笔交易详情内容（基础信息 / 因子 / 计划 / K 线 / 规则） ===== */
 .wr-detail-basic {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1809,6 +1845,12 @@ button.idx-card:hover {
   width: 84px;
   flex: none;
   color: var(--muted);
+}
+
+/* 记录日买卖计划快照（区别于实时买卖计划：虚线框 + 透明底） */
+.wr-plan-snapshot {
+  background: transparent;
+  border-style: dashed;
 }
 
 /* 明细表行可点击（P5b） */

@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "resolveJsonModule": true,
+    "rootDir": ".",
+    "outDir": "dist-test",
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "src/domain/types.ts",
+    "src/domain/winrate.ts",
+    "src/domain/winrate-config.ts",
+    "src/domain/strategy.ts",
+    "src/lib/winrate-sim.ts",
+    "src/lib/winrate-stats.ts",
+    "scripts/winrate-acceptance.ts"
+  ]
+}
