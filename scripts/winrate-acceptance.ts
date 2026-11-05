@@ -16,6 +16,19 @@ import { tradeTriggerPrice, tradeRuleNote } from '../src/domain/winrate';
 import { TRADE_RULE_VERSION } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason } from '../src/domain/winrate';
 import type { KlineRow } from '../src/domain/types';
+import {
+  resolveAmbiguities,
+  selectPeriod,
+  tradingDaysBetween,
+  isPendingExpired,
+  findAmbiguousCandidateDay,
+  disambiguateIntraday,
+  sliceDayBars,
+  periodFallbackChain,
+  toMinuteBar,
+  type MinuteBar,
+  type FetchMinuteBars,
+} from '../src/lib/winrate-minute';
 
 // ───────── 断言工具 ─────────
 let passed = 0;
@@ -109,6 +122,94 @@ function makeRec(p: Plan): WinRateRecord {
     trade,
   };
 }
+
+// ───────── 分钟线消解测试辅助 ─────────
+/** 生成连续日期序列（含周末，仅作交易日历 mock 用） */
+function genDates(start: string, n: number): string[] {
+  const out: string[] = [];
+  const d = new Date(start + 'T00:00:00');
+  for (let i = 0; i < n; i++) {
+    out.push(d.toISOString().slice(0, 10));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+
+/** 构造一笔「日K歧义」记录并预置 minuteResolve 元数据（模拟 settleOpenRecords 已挂候选日） */
+function makeAmbiguousRec(opts: {
+  code?: string;
+  date?: string;
+  stop?: number;
+  target1?: number;
+  target2?: number;
+  sellReason?: SellReason;
+  buyDate?: string;
+  buyPrice?: number;
+  candidateDay?: string;
+  status?: 'pending' | 'resolved' | 'degraded';
+  firstAttemptDate?: string;
+  requiredPeriod?: 1 | 5 | 15;
+}): WinRateRecord {
+  const rec = makeRec({
+    date: opts.date ?? '2026-01-01',
+    code: opts.code ?? '600001',
+    stop: opts.stop ?? 9,
+    target1: opts.target1 ?? 11,
+    target2: opts.target2 ?? 12,
+  });
+  rec.trade = {
+    ...rec.trade,
+    sellReason: opts.sellReason ?? 'ambiguous_intraday',
+    excludedFromStats: true,
+    status: 'closed',
+    buyDate: opts.buyDate ?? '2026-01-02',
+    buyPrice: opts.buyPrice ?? 10,
+    sellDate: null,
+    sellPrice: null,
+    holdDays: null,
+    returnPct: null,
+    anomalies: [],
+    minuteResolve: opts.candidateDay
+      ? {
+          candidateDay: opts.candidateDay,
+          status: opts.status ?? 'pending',
+          requiredPeriod: opts.requiredPeriod,
+          firstAttemptDate: opts.firstAttemptDate,
+        }
+      : undefined,
+  };
+  return rec;
+}
+
+/** 生成某日的分钟 bars（seq: [open, high, low, close]），时间从 09:31 起每分钟一根 */
+function mkMin(day: string, seq: [number, number, number, number][]): MinuteBar[] {
+  return seq.map((s, i) => ({
+    date: `${day} 09:${String(31 + i).padStart(2, '0')}:00`,
+    open: s[0],
+    high: s[1],
+    low: s[2],
+    close: s[3],
+    volume: 1000,
+  }));
+}
+
+/** 注入的 mock fetch：按 `${code}:${period}` 返回预置 bars */
+function makeMockFetch(barsByKey: Record<string, MinuteBar[]>): FetchMinuteBars {
+  return async (code: string, period: 1 | 5 | 15) => barsByKey[`${code}:${period}`] ?? [];
+}
+
+// 止损先触及（idx0 下穿 stop，idx1 上穿 t1）→ disambiguate 应判 stop_loss
+const STOP_FIRST: [number, number, number, number][] = [
+  [10.5, 10.6, 8.5, 9.0],
+  [9.0, 11.5, 8.8, 11.0],
+];
+// 目标一先触及（idx0 上穿 t1，idx1 下穿 stop）→ disambiguate 应判 target1
+const T1_FIRST: [number, number, number, number][] = [
+  [10.5, 11.5, 10.4, 11.0],
+  [11.0, 11.2, 8.5, 9.0],
+];
+// 同根 bar 双边（high≥t1 且 low≤stop 同 idx0）→ 无法定序 → 降级
+const SAME_BAR: [number, number, number, number][] = [[10.5, 12.5, 8.0, 11.0]];
 
 // ───────── 7 条验收用例 + 用例1回归 ─────────
 function runCases() {
@@ -380,19 +481,268 @@ function runHelperAssertion() {
   check(note.includes('触目标一'), `tradeRuleNote 含原因 (实际: "${note}")`);
 }
 
-// ───────── 入口 ─────────
-console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
-console.log(`TRADE_RULE_VERSION = ${TRADE_RULE_VERSION}`);
-runCases();
-runStatsAssertion();
-runHelperAssertion();
+// ───────── 分钟线歧义消解（Step-3）断言 ─────────
+async function runMinuteAssertions() {
+  section('Step-3 纯函数：period 选择 / D 边界 / 时效');
+  check(selectPeriod(0) === 1, 'selectPeriod(0)=1');
+  check(selectPeriod(3) === 1, 'selectPeriod(3)=1');
+  check(selectPeriod(4) === 5, 'selectPeriod(4)=5');
+  check(selectPeriod(21) === 5, 'selectPeriod(21)=5');
+  check(selectPeriod(22) === 15, 'selectPeriod(22)=15');
+  check(selectPeriod(32) === 15, 'selectPeriod(32)=15');
+  check(selectPeriod(33) === null, 'selectPeriod(33)=null（不拉取）');
+  check(
+    JSON.stringify(periodFallbackChain(2)) === JSON.stringify([1, 5, 15]),
+    'periodFallbackChain(≤3)=[1,5,15]',
+  );
+  check(
+    JSON.stringify(periodFallbackChain(10)) === JSON.stringify([5, 15]),
+    'periodFallbackChain(4~21)=[5,15]',
+  );
+  check(JSON.stringify(periodFallbackChain(25)) === JSON.stringify([15]), 'periodFallbackChain(22~32)=[15]');
+  check(JSON.stringify(periodFallbackChain(40)) === JSON.stringify([]), 'periodFallbackChain(>32)=[]');
 
-console.log(`\n──────── 结果 ────────`);
-console.log(`通过 ${passed} / ${passed + failed}`);
-if (failed > 0) {
-  console.log(`失败 ${failed} 条：`);
-  fails.forEach((f) => console.log(`  - ${f}`));
-  process.exit(1);
-} else {
-  console.log('全部通过 ✅');
+  const ref = genDates('2026-01-02', 60);
+  check(
+    tradingDaysBetween('2026-01-02', '2026-01-05', ref) === 3,
+    `tradingDaysBetween(有交易日历)=3 (实际: ${tradingDaysBetween('2026-01-02', '2026-01-05', ref)})`,
+  );
+  check(
+    isPendingExpired('2026-01-02', ref[ref.length - 1], ref) === true,
+    'isPendingExpired：>30 交易日 → true',
+  );
+  check(
+    isPendingExpired('2026-03-01', ref[ref.length - 1], ref) === false,
+    'isPendingExpired：近期尝试 → false',
+  );
+  check(
+    isPendingExpired('2026-01-02', '2026-03-01') === true,
+    'isPendingExpired：无日历 >42 自然日 → true（×1.4 近似，非精确交易日）',
+  );
+  check(isPendingExpired(undefined, '2026-03-01') === false, 'isPendingExpired：从未尝试 → false');
+
+  // disambiguateIntraday 定序
+  const dis1 = disambiguateIntraday({ bars: mkMin('2026-01-03', STOP_FIRST), stop: 9, target1: 11, target2: 12 });
+  check(dis1.resolved && dis1.reason === 'stop_loss', `disambiguate 止损先 → stop_loss (实际: ${dis1.reason})`);
+  const dis2 = disambiguateIntraday({ bars: mkMin('2026-01-03', T1_FIRST), stop: 9, target1: 11, target2: 12 });
+  check(dis2.resolved && dis2.reason === 'target1', `disambiguate 目标一先 → target1 (实际: ${dis2.reason})`);
+  const dis3 = disambiguateIntraday({ bars: mkMin('2026-01-03', SAME_BAR), stop: 9, target1: 11, target2: 12 });
+  check(dis3.resolved === false, 'disambiguate 同根 bar 双边 → 无法定序（unresolved）');
+
+  const sliced = sliceDayBars([...mkMin('2026-01-03', STOP_FIRST), ...mkMin('2026-01-04', STOP_FIRST)], '2026-01-03');
+  check(sliced.length === STOP_FIRST.length, `sliceDayBars 按候选日切片 (实际: ${sliced.length})`);
+
+  // findAmbiguousCandidateDay 应与 sim ③ 一致（返回首个可卖日双边触及日）
+  {
+    const rec = makeRec({ date: '2026-01-01', stop: 9, target1: 11, target2: 12 });
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10, 10, 10, 10),
+      k('2026-01-02', 10.2, 10.4, 10.1, 10.3),
+      k('2026-01-03', 10.3, 12.5, 8.0, 11), // 双边触及 → 候选日
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.sellReason === 'ambiguous_intraday', `sim ③ → ambiguous_intraday (实际: ${trade.sellReason})`);
+    const cand = findAmbiguousCandidateDay(daily, rec);
+    check(cand === '2026-01-03', `findAmbiguousCandidateDay 复算候选日=2026-01-03 (实际: ${cand})`);
+    // 候选日 + D≤3 → 应选 period=1
+    check(selectPeriod(tradingDaysBetween('2026-01-03', '2026-01-06')) === 1, '候选日距结算 3 自然日 → period=1');
+  }
+
+  section('Step-3 消解编排：period=1 窗口成功');
+  {
+    const rec = makeAmbiguousRec({ code: '600101', candidateDay: '2026-01-03' });
+    const fetch = makeMockFetch({
+      '600101:1': mkMin('2026-01-03', STOP_FIRST),
+      '600101:5': [],
+      '600101:15': [],
+    });
+    const res = await resolveAmbiguities([rec], fetch, { now: '2026-01-06' });
+    check(res.resolved === 1 && res.degraded === 0 && res.overWindow === 0, `resolved=1 (实际: ${res.resolved})`);
+    const p = res.patches.get(rec.id);
+    check(p?.minuteResolve.status === 'resolved', 'minuteResolve.status=resolved');
+    check(p?.trade?.sellReason === 'stop_loss', `回填原因=stop_loss (实际: ${p?.trade?.sellReason})`);
+    check(p?.trade?.excludedFromStats === false, '回填后计入分母（excluded=false）');
+    check(p?.trade?.sellDate === '2026-01-03', `回填卖出日=候选日 (实际: ${p?.trade?.sellDate})`);
+    check(res.fetchCounts[1] === 1, `period=1 拉取次数=1 (实际: ${res.fetchCounts[1]})`);
+    // Plan A 审计：保留消解前日K结算原值 + 消解元信息（closed 记录修改可追溯）
+    const a = p?.trade?.minuteResolutionAudit;
+    check(a != null, 'Plan A：写入 minuteResolutionAudit 审计字段');
+    check(a?.originalSellReason === 'ambiguous_intraday', `审计原值 sellReason=ambiguous_intraday (实际: ${a?.originalSellReason})`);
+    check(a?.originalExcludedFromStats === true, `审计原值 excludedFromStats=true (实际: ${a?.originalExcludedFromStats})`);
+    check(a?.version === 'v2-t1-fix', `审计 version=v2-t1-fix (实际: ${a?.version})`);
+    check(typeof a?.resolvedAt === 'string' && a.resolvedAt.length > 0, '审计 resolvedAt 为时间戳字符串');
+  }
+
+  section('Step-3 消解编排：period=5 窗口成功（D=4~21，懒回退只拉 period=5，不拉 period=1/15）');
+  {
+    const rec = makeAmbiguousRec({ code: '600102', candidateDay: '2026-01-03' });
+    const fetch = makeMockFetch({
+      '600102:1': undefined as unknown as MinuteBar[], // 不在此窗口（不会用到）
+      '600102:5': mkMin('2026-01-03', STOP_FIRST),
+      '600102:15': [], // 懒回退：period=5 已命中候选日，p15 永不触发
+    });
+    const res = await resolveAmbiguities([rec], fetch, { now: '2026-01-13' }); // 自然 D=10
+    check(res.resolved === 1, `resolved=1 (实际: ${res.resolved})`);
+    check(res.fetchCounts[1] === 0, `period=1 未拉取=0 (实际: ${res.fetchCounts[1]})`);
+    check(res.fetchCounts[5] === 1, `period=5 拉取次数=1 (实际: ${res.fetchCounts[5]})`);
+    check(res.fetchCounts[15] === 0, `period=15 未拉取=0（懒回退省限流） (实际: ${res.fetchCounts[15]})`);
+    const p = res.patches.get(rec.id);
+    check(p?.trade?.sellReason === 'stop_loss', `回填原因=stop_loss (实际: ${p?.trade?.sellReason})`);
+  }
+
+  section('Step-3 消解编排：D>32 直接降级（不拉取）');
+  {
+    const rec = makeAmbiguousRec({ code: '600103', candidateDay: '2026-01-03' });
+    const fetch = makeMockFetch({});
+    const res = await resolveAmbiguities([rec], fetch, { now: '2026-03-10' }); // 自然 D=66
+    check(res.resolved === 0 && res.overWindow === 1, `overWindow=1 (实际: ${res.overWindow})`);
+    check(res.fetchCounts[1] === 0 && res.fetchCounts[5] === 0 && res.fetchCounts[15] === 0, '未拉取（fetch=0）');
+    const p = res.patches.get(rec.id);
+    check(p?.minuteResolve.status === 'degraded', 'minuteResolve.status=degraded');
+    check((p?.minuteResolve.note ?? '').includes('超出分钟线窗口'), `note=超出分钟线窗口 (实际: ${p?.minuteResolve.note})`);
+  }
+
+  section('Step-3 消解编排：pending 重试成功');
+  {
+    const rec = makeAmbiguousRec({
+      code: '600104',
+      candidateDay: '2026-01-03',
+      status: 'pending',
+      firstAttemptDate: '2026-01-02',
+    });
+    const fetch = makeMockFetch({ '600104:1': mkMin('2026-01-03', STOP_FIRST) });
+    const res = await resolveAmbiguities([rec], fetch, { now: '2026-01-06' });
+    check(res.resolved === 1, `resolved=1（重试成功） (实际: ${res.resolved})`);
+    check(res.patches.get(rec.id)?.minuteResolve.status === 'resolved', 'status=resolved');
+  }
+
+  section('Step-3 消解编排：pending >30 交易日放弃（永久降级，不拉取）');
+  {
+    const refCal = genDates('2026-01-02', 60);
+    const rec = makeAmbiguousRec({
+      code: '600105',
+      candidateDay: '2026-02-28',
+      status: 'pending',
+      firstAttemptDate: '2026-01-02',
+    });
+    const fetch = makeMockFetch({});
+    const res = await resolveAmbiguities([rec], fetch, { now: refCal[refCal.length - 1], refTradingDates: refCal });
+    check(res.degraded === 1 && res.resolved === 0 && res.overWindow === 0, `degraded=1 (实际: ${res.degraded})`);
+    check(res.fetchCounts[1] === 0, '过期记录不拉取（fetch=0）');
+    const p = res.patches.get(rec.id);
+    check(p?.minuteResolve.status === 'degraded', 'status=degraded');
+    check((p?.minuteResolve.note ?? '').includes('时效'), `note=超出时效 (实际: ${p?.minuteResolve.note})`);
+    check(p?.trade?.excludedFromStats === true, '过期降级仍排除分母（excluded=true）');
+  }
+
+  section('Step-3 消解编排：ambiguous_1min 排除分母（同 ambiguous_intraday）');
+  {
+    const rec = makeAmbiguousRec({
+      code: '600106',
+      sellReason: 'ambiguous_1min',
+      candidateDay: '2026-01-03',
+    });
+    const fetch = makeMockFetch({ '600106:1': mkMin('2026-01-03', SAME_BAR), '600106:5': [], '600106:15': [] });
+    const res = await resolveAmbiguities([rec], fetch, { now: '2026-01-06' }); // D=3≤3 但同根 bar 无法定序 → 降级 ambiguous_1min
+    check(res.degraded === 1, `degraded=1 (实际: ${res.degraded})`);
+    const p = res.patches.get(rec.id);
+    check(p?.trade?.sellReason === 'ambiguous_1min', `sellReason=ambiguous_1min (实际: ${p?.trade?.sellReason})`);
+    check(p?.trade?.excludedFromStats === true, 'ambiguous_1min 排除分母（excluded=true）');
+  }
+
+  section('Step-3 额外：period=1 拉不到目标日 → 回退 period=5 成功');
+  {
+    const rec = makeAmbiguousRec({ code: '600107', candidateDay: '2026-01-03' });
+    // period=1 返回空（模拟数据源缺口，拉不到目标日）；period=5 含候选日
+    const fetch = makeMockFetch({
+      '600107:1': [],
+      '600107:5': mkMin('2026-01-03', STOP_FIRST),
+      '600107:15': [],
+    });
+    const res = await resolveAmbiguities([rec], fetch, { now: '2026-01-06' }); // D=3 → 链 [1,5,15]
+    check(res.resolved === 1, `resolved=1（回退 p5 成功） (实际: ${res.resolved})`);
+    check(res.fetchCounts[1] === 1, `period=1 仍尝试拉取=1 (实际: ${res.fetchCounts[1]})`);
+    check(res.fetchCounts[5] === 1, `period=5 回退拉取=1 (实际: ${res.fetchCounts[5]})`);
+    const p = res.patches.get(rec.id);
+    check(p?.trade?.sellReason === 'stop_loss', `回填原因=stop_loss (实际: ${p?.trade?.sellReason})`);
+  }
+
+  section('Step-3 额外：同 stock 多候选日共享一次拉取（聚合 + 懒回退省限流）');
+  {
+    const rA = makeAmbiguousRec({ code: '600999', candidateDay: '2026-01-03' });
+    const rB = makeAmbiguousRec({ code: '600999', candidateDay: '2026-01-04' });
+    // 同一 (code,period=1) 的 bars 同时含两个候选日 → 仅拉一次；D≤3 命中 p1 即停，p5/p15 永不触发
+    const fetch = makeMockFetch({
+      '600999:1': [...mkMin('2026-01-03', STOP_FIRST), ...mkMin('2026-01-04', STOP_FIRST)],
+      '600999:5': [],
+      '600999:15': [],
+    });
+    const res = await resolveAmbiguities([rA, rB], fetch, { now: '2026-01-06' });
+    check(res.resolved === 2, `resolved=2（两候选日均消解） (实际: ${res.resolved})`);
+    check(res.fetchCounts[1] === 1, `同 stock 同 period 仅拉取 1 次（聚合共享） (实际: ${res.fetchCounts[1]})`);
+    check(res.fetchCounts[5] === 0 && res.fetchCounts[15] === 0, `D≤3 仅 p1 命中即停，p5/p15 不拉取（懒回退省限流） (实际: [5]=${res.fetchCounts[5]},[15]=${res.fetchCounts[15]})`);
+  }
 }
+
+/** ambiguous_1min 与 ambiguous_intraday 一并排除分母的统计断言 */
+function runMinuteStatsAssertion() {
+  section('Step-3 统计：ambiguous_1min 与 ambiguous_intraday 同排除分母');
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 11, target2: 12 };
+
+  const normal: WinRateRecord[] = [];
+  // 1 笔正常盈利（目标一成交）
+  {
+    const rec = makeRec({ date: '2026-04-01', ...plan });
+    const daily = [
+      ...HIST,
+      k('2026-04-01', 10, 10, 10, 10),
+      k('2026-04-02', 10.2, 10.4, 10.1, 10.3),
+      k('2026-04-03', 11.5, 11.6, 11.2, 11.4),
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    normal.push({ ...rec, trade });
+  }
+  // 1 笔 ambiguous_intraday
+  const ambIntra = makeAmbiguousRec({ code: '600201', date: '2026-04-10', candidateDay: '2026-04-12' });
+  // 1 笔 ambiguous_1min
+  const amb1min = makeAmbiguousRec({
+    code: '600202',
+    date: '2026-04-15',
+    sellReason: 'ambiguous_1min',
+    candidateDay: '2026-04-17',
+  });
+
+  const records = [...normal, ambIntra, amb1min];
+  const s = computeWinRateStats(records, { excludeAnomaly: true }).byStrategy[0];
+  check(s.total === 3, `total=3 (实际: ${s.total})`);
+  check(s.closed === 1, `closed=1（仅 1 笔有效）(实际: ${s.closed})`);
+  check(s.ambiguousExcluded === 2, `ambiguousExcluded=2（intraday + 1min 同排除）(实际: ${s.ambiguousExcluded})`);
+  check(s.ambiguityRate === 2 / 3, `ambiguityRate≈0.667 (实际: ${s.ambiguityRate})`);
+  check(s.winRate === 1, `winRate=1（唯一有效笔盈利）(实际: ${s.winRate})`);
+}
+
+// ───────── 入口 ─────────
+async function main() {
+  console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
+  console.log(`TRADE_RULE_VERSION = ${TRADE_RULE_VERSION}`);
+  runCases();
+  runStatsAssertion();
+  runHelperAssertion();
+  await runMinuteAssertions();
+  runMinuteStatsAssertion();
+
+  console.log(`\n──────── 结果 ────────`);
+  console.log(`通过 ${passed} / ${passed + failed}`);
+  if (failed > 0) {
+    console.log(`失败 ${failed} 条：`);
+    fails.forEach((f) => console.log(`  - ${f}`));
+    process.exit(1);
+  } else {
+    console.log('全部通过 ✅');
+  }
+}
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

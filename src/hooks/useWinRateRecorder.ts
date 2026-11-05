@@ -44,13 +44,23 @@ import {
 } from '../domain/winrate-config';
 import { simulateTrade, type SimSuspensionRange } from '../lib/winrate-sim';
 import {
+  findAmbiguousCandidateDay,
+  resolveAmbiguities,
+  toMinuteBar,
+  selectPeriod,
+  tradingDaysBetween,
+  type FetchMinuteBars,
+  type MinuteBar,
+} from '../lib/winrate-minute';
+import {
   genWinRateRecordId,
   type WinRateRecord,
   type TradeRecord,
   type WinRateAnomaly,
   type WinRateSnapshot,
+  type MinuteResolveMeta,
 } from '../domain/winrate';
-import { useWinRateStore, getLiveRecords } from './useWinRateStore';
+import { useWinRateStore, getLiveRecords, applyMinuteResolution, registerMinuteResolver } from './useWinRateStore';
 
 const RECORD_TOP_N = 5;
 const KLINE_COUNT = 250;
@@ -120,6 +130,38 @@ function toFullCode(code: string): string {
   if (/^(6|9)/.test(c)) return 'sh' + c;
   if (/^(4|8)/.test(c)) return 'bj' + c;
   return 'sz' + c;
+}
+
+/** 模块级：分钟线拉取（marketApi.klineMin → MinuteBar[]），供内联结算与启动重试共用 */
+const fetchMinuteBars: FetchMinuteBars = async (code6: string, period: 1 | 5 | 15): Promise<MinuteBar[]> => {
+  try {
+    const res = await marketApi.klineMin(code6, String(period), 'qfq', 1000);
+    return (res.rows ?? []).map(toMinuteBar);
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * 分钟线歧义消解执行器（模块级单例逻辑）：
+ * 扫描所有 status='pending' 的分钟消解记录 → 按 (code,period) 聚合拉取 → 盘中对候选日定序 → 回填或降级。
+ * 回填通过 applyMinuteResolution（已平仓记录的定向例外，仅 minuteResolve 元数据存在才可改）。
+ * 触发路径（不另起定时器）：
+ *   ① 结算时：settleOpenRecords 日K模拟后调用（成功回填 / 失败标 pending 等下次）；
+ *   ② 加载时：useWinRateStore.read() 发现 pending → scheduleStartupPendingRetry 调用本函数；
+ *   ③ 应用启动：runDailyCycle → settleOpenRecords 末尾顺带调用。
+ */
+async function resolvePendingMinutes(): Promise<void> {
+  const recs = getLiveRecords().filter((r) => r.trade.minuteResolve?.status === 'pending');
+  if (recs.length === 0) return;
+  const refDates = await getReferenceTradingDates().catch(() => null);
+  const res = await resolveAmbiguities(recs, fetchMinuteBars, {
+    now: new Date(),
+    refTradingDates: refDates,
+  });
+  for (const [id, patch] of res.patches) {
+    applyMinuteResolution(id, patch.trade ?? {}, patch.minuteResolve);
+  }
 }
 
 /** 取记录日后首个交易日索引（K 线按日期升序；与 sim 同义，仅用于预估/守卫） */
@@ -453,6 +495,23 @@ export function useWinRateRecorder() {
         }
         const ranges = buildSuspensionRanges(daily, refDates, rec.date);
         const { trade } = simulateTrade(rec, daily, { suspensionRanges: ranges });
+        // Step-3 分钟线歧义消解：仅对「日K 歧义（ambiguous_intraday 且已排除分母）」记录登记候选日 + pending 元数据。
+        // winrate-sim 是日K引擎，不碰分钟线；候选日用 findAmbiguousCandidateDay 复刻 sim ③ 复算，二者口径一致。
+        let minuteResolve: MinuteResolveMeta | undefined;
+        if (trade.sellReason === 'ambiguous_intraday' && trade.excludedFromStats === true) {
+          const cand = findAmbiguousCandidateDay(daily, rec, { suspensionRanges: ranges });
+          if (cand) {
+            // D = 候选日距结算执行日（now）的交易日距离；D>32 不拉取（由 resolveAmbiguities 判 overWindow）。
+            const D = tradingDaysBetween(cand, localDate(), refDates);
+            const rp = selectPeriod(D);
+            minuteResolve = {
+              candidateDay: cand,
+              status: 'pending',
+              requiredPeriod: rp ?? undefined,
+              firstAttemptDate: localDate(),
+            };
+          }
+        }
         // 修正次新股 tPlus1SellDate：记录时 K 仅到记录日（买入日尚未产生）→ tPlus1 估计为空/不准；
         // 结算时 K 已含买入日，按 buyDate 重算 T+1 可卖日回填（buyDate 缺失则保持原值）
         let tPlus1SellDate = rec.tPlus1SellDate;
@@ -471,6 +530,7 @@ export function useWinRateRecorder() {
           status: trade.status,
           anomalies: trade.anomalies,
           tPlus1SellDate,
+          minuteResolve,
         });
         if (ok.ok) result.settled++;
         else result.errors++;
@@ -478,6 +538,8 @@ export function useWinRateRecorder() {
         result.errors++;
       }
     }
+    // Step-3：日K结算后，立即尝试分钟线消解（成功回填 / 失败保持 pending 等待下次启动扫描重试）
+    await resolvePendingMinutes().catch(() => undefined);
     return result;
   }, [updateTrade]);
 
@@ -630,3 +692,7 @@ export function useWinRateRecorder() {
     runDailyCycle,
   };
 }
+
+// 模块加载即注册分钟线消解执行器（注入 fetchMinuteBars + resolveAmbiguities + applyMinuteResolution）。
+// 供 useWinRateStore.read() 启动扫描时调用；运行期 registerMinuteResolver 已就绪，settleOpenRecords 内联触发亦可用。
+registerMinuteResolver(resolvePendingMinutes);

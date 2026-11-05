@@ -44,7 +44,8 @@ export type SellReason =
   | 'target1_gap' // 任意可卖日(含 T+1 首可卖日)开盘跳空越过目标一（按开盘价成交）
   | 'target2_gap' // 任意可卖日开盘跳空越过目标二（按开盘价成交）
   | 'stop_gap' // 任意可卖日开盘跳空跌破止损（按开盘价成交）
-  | 'ambiguous_intraday'; // 日K（仅 OHLC）无法判定盘中 high/low 先后：双边触及。可卖日双边→排除分母；买入当日双边→计入分母仅原因歧义
+  | 'ambiguous_intraday' // 日K（仅 OHLC）无法判定盘中 high/low 先后：双边触及。可卖日双边→排除分母；买入当日双边→计入分母仅原因歧义
+  | 'ambiguous_1min'; // 分钟线（period=1）仍无法判定盘中 high/low 先后（序列缺失 / 同根 bar 双边）→ 排除分母（同 ambiguous_intraday）
 
 /**
  * 异常标注（数据质量标记，不参与统计，仅展示提示）。
@@ -95,6 +96,7 @@ export const SELL_REASON_LABELS: Record<SellReason, string> = {
   target2_gap: '跳空触目标二',
   stop_gap: '跳空止损',
   ambiguous_intraday: '日K无法判定盘中先后',
+  ambiguous_1min: '分钟线无法判定盘中先后',
 };
 
 /**
@@ -111,14 +113,47 @@ export function tradeTriggerPrice(record: WinRateRecord): number | null {
   return null;
 }
 
+/**
+ * 分钟线歧义消解元数据（TradeRecord.minuteResolve）。
+ * 仅当记录因「日K 双边歧义（ambiguous_intraday / ambiguous_1min，均已排除分母）」需分钟线二次判定时填充。
+ * 层级（period 选择，详见 winrate-minute.ts）：
+ *  - 候选日距结算日 D≤3 → period=1（1min，~4 交易日窗口）
+ *  - 4≤D≤21 → period=5（5min，~21 交易日）
+ *  - 22≤D≤32 → period=15（15min，~32 交易日，数据源最深的墙）
+ *  - D>32 → 不拉取，直接降级 ambiguous_intraday（"超出分钟线窗口"）
+ * 回退链：首选 period 拉不到候选日 → 试更粗 period（p1→p5→p15）→ 仍拉不到才降级。
+ */
+export type MinuteResolveStatus = 'pending' | 'resolved' | 'degraded';
+
+export interface MinuteResolveMeta {
+  /** 歧义候选日（sim ③ 首个可卖日双边触及的那天；也是分钟线切片定位日） */
+  candidateDay: string;
+  /** pending=待重试；resolved=已消解回填；degraded=永久降级（超窗口/超时效/无法定序） */
+  status: MinuteResolveStatus;
+  /** 初次选定的 period（按 D 边界），用于回退链与展示 */
+  requiredPeriod?: 1 | 5 | 15;
+  /** 首次进入 pending 的日期（时效判定基准；>30 交易日/42 自然日则放弃） */
+  firstAttemptDate?: string;
+  /** 降级 / 失败原因，如 "超出分钟线窗口"、"超出时效(>30交易日/42自然日)"、"1min无法消解" */
+  note?: string;
+  /** 消解后的具体卖出原因（status='resolved' 时填充） */
+  resolvedReason?: SellReason;
+}
+
 /** 交易执行规则说明（UI 展示用：触发价 / 歧义 / 历史规则标识） */
 export function tradeRuleNote(record: WinRateRecord): string {
   const sr = SELL_REASON_LABELS[record.trade.sellReason];
   const tp = tradeTriggerPrice(record);
   let s = sr;
   if (tp != null) s += `（触发价 ${tp.toFixed(2)}）`;
-  if (record.trade.excludedFromStats) s += ' · 日K歧义已排除分母';
-  else if (record.trade.sellReason === 'ambiguous_intraday') s += ' · 日K无法判定盘中先后(计入)';
+  if (record.trade.excludedFromStats) s += ' · 日K/分钟线歧义已排除分母';
+  else if (record.trade.sellReason === 'ambiguous_intraday' || record.trade.sellReason === 'ambiguous_1min')
+    s += ' · 无法判定盘中先后(计入)';
+  // Plan A：分钟线消解回填（原 ambiguous_* → 具体原因），保留日K结算原值可追溯
+  if (record.trade.minuteResolutionAudit) {
+    const o = record.trade.minuteResolutionAudit.originalSellReason;
+    s += ` · 分钟线消解(原:${SELL_REASON_LABELS[o] ?? o})`;
+  }
   if (record.trade.ruleVersion === 'v1-legacy') s += ' · 历史规则记录';
   return s;
 }
@@ -168,6 +203,24 @@ export interface TradeRecord {
   invalidReason?: string;
   /** 是否从胜率分母中排除（日K歧义等）：true=不计入胜率/盈亏比，但仍可在明细表查看 */
   excludedFromStats?: boolean;
+  /** 分钟线歧义消解元数据（ambiguous_intraday / ambiguous_1min 待二次判定时填充；详见 MinuteResolveMeta） */
+  minuteResolve?: MinuteResolveMeta;
+  /**
+   * 分钟线消解审计（Plan A：满足"记录可审计"合规）。
+   * 当一笔 ambiguous_intraday / ambiguous_1min 记录经分钟线二次判定被回填为具体原因时，
+   * 本字段保留【消解前的日K结算原值】+ 消解元信息，使 closed 记录的修改可追溯、原判定不丢失。
+   * 原值（original*）取自日K结算时落库的 sellReason/sellPrice/returnPct/excludedFromStats；
+   * resolvedAt 为消解执行时刻，version 为消解逻辑版本（= TRADE_RULE_VERSION）。
+   * 若记录从未被分钟线消解（或本身非歧义记录），本字段为 null/undefined。
+   */
+  minuteResolutionAudit?: {
+    originalSellReason: SellReason;
+    originalSellPrice: number | null;
+    originalReturnPct: number | null;
+    originalExcludedFromStats: boolean;
+    resolvedAt: string | null;
+    version: string | null;
+  } | null;
 }
 
 /** 价格/信号来源口径：区分盘中尾盘快照与未来收盘快照，统计层据此隔离，不可混算 */

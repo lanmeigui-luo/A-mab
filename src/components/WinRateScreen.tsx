@@ -102,6 +102,12 @@ function WinRateScreenInner({
   const result = useMemo(() => computeWinRateStats(records, filter), [records, filter]);
   const filteredRecords = useMemo(() => filterWinRateRecords(records, filter), [records, filter]);
 
+  // P0补充#1：统计页提示分钟线消歧修正笔数（其成交价/收益率由分钟线回填，计入分母，与纯日K口径不同）
+  const disambiguationCorrections = useMemo(
+    () => filteredRecords.filter((r) => r.trade?.minuteResolutionAudit).length,
+    [filteredRecords],
+  );
+
   // P4 图表用记录：尊重时间/战法/数据来源筛选，但去掉「持有周期」过滤
   // （分桶分布图自身即按桶拆分，套用该过滤会让分布退化为单桶）。
   const chartRecords = useMemo(
@@ -207,6 +213,13 @@ function WinRateScreenInner({
           卖出规则（v2-t1-fix）：A股T+1，买入后首个可交易日才能卖；目标价1/2为触发阈值，实际成交价按T+1可卖日真实开盘/盘中价执行（开盘跳空按开盘价、盘中单边按对应触发价）。日K仅OHLC无法判定盘中高低先后，可卖日双边触及标「日K歧义」并排除分母；歧义比例&gt;20%时该战法卡片标黄，胜率置信度低，建议接入分钟数据。
         </div>
       </div>
+
+      {disambiguationCorrections > 0 && (
+        <div className="alert info wr-disambig">
+          本页含 <b>{disambiguationCorrections}</b> 笔「分钟线消歧修正」记录：其成交价与收益率由分钟线回填（原在日K口径下因买卖点歧义被排除分母），与纯日K原始结算口径不同。
+          明细表「审计」字段可核对消歧前的日K原始值。
+        </div>
+      )}
 
       {!hasData ? (
         <div className="empty wr-empty">

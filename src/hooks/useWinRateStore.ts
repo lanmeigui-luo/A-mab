@@ -1,11 +1,11 @@
 import { useCallback, useSyncExternalStore } from 'react';
-import type { WinRateRecord, TradeRecord } from '../domain/winrate';
+import type { WinRateRecord, TradeRecord, MinuteResolveMeta } from '../domain/winrate';
 
 const STORAGE_KEY = 'radar.winrate.v1';
 const SCHEMA_VERSION = 1;
 
 /** updateTrade 允许回写的字段：trade 核心字段 + tPlus1SellDate（次新股结算时回填）。已平仓记录整条禁改。 */
-export type WinRateTradePatch = Partial<TradeRecord> & { tPlus1SellDate?: string | null };
+export type WinRateTradePatch = Partial<TradeRecord> & { tPlus1SellDate?: string | null; minuteResolve?: MinuteResolveMeta };
 
 interface Persisted {
   version: number;
@@ -18,6 +18,11 @@ interface Persisted {
 let state: WinRateRecord[] = read();
 let storageOk = true; // 默认 true；首次写入失败才降级为 false
 const listeners = new Set<() => void>();
+
+// 分钟线歧义消解：由 useWinRateRecorder 在模块加载时注册 resolver（注入 fetchBars）。
+// read() 加载后若发现 pending 记录，做一次启动扫描（一次性，非定时器）。
+let minuteResolver: (() => Promise<void>) | null = null;
+let startupScanScheduled = false;
 
 function emit() {
   for (const l of listeners) l();
@@ -74,14 +79,62 @@ function read(): WinRateRecord[] {
     const p = JSON.parse(raw) as Persisted;
     if (!p || p.version !== SCHEMA_VERSION || !Array.isArray(p.records)) return [];
     // 仅保留结构合法、含 id / code / strategyId 的记录；旧数据补默认字段并迁移旧规则记录
-    return p.records
+    const loaded = p.records
       .filter(
         (r) => r && typeof r.id === 'string' && typeof r.code === 'string' && typeof r.strategyId === 'string',
       )
       .map((r) => migrateWinRateRecord(r));
+    // 启动扫描：发现 pending 分钟消解记录则触发一次重试（非交易时段打开应用顺带重试；非定时器）
+    if (loaded.some((r) => r.trade.minuteResolve?.status === 'pending')) scheduleStartupPendingRetry();
+    return loaded;
   } catch {
     return [];
   }
+}
+
+/**
+ * 分钟线歧义消解回填：允许更新「已平仓但 sellReason 为 ambiguous_intraday/ambiguous_1min」的记录。
+ * 这是对 useWinRateStore「已平仓不可改」规则的定向例外——仅用于把日K歧义的 closed 记录
+ * 通过分钟线二次判定细化为具体原因（excludedFromStats=false）或永久降级，不改变其已平仓本质。
+ * 仅当记录本身带有 minuteResolve 元数据时才生效，其它 closed 记录仍拒绝修改。
+ */
+export function applyMinuteResolution(
+  recordId: string,
+  patch: WinRateTradePatch,
+  minuteResolve: MinuteResolveMeta,
+): boolean {
+  if (!state.some((r) => r.id === recordId && r.trade.minuteResolve != null)) return false;
+  let done = false;
+  const { tPlus1SellDate, ...tradePatch } = patch;
+  const next = state.map((r) => {
+    if (r.id !== recordId || r.trade.minuteResolve == null) return r;
+    done = true;
+    const updated: WinRateRecord = { ...r, trade: { ...r.trade, ...tradePatch } };
+    updated.trade.minuteResolve = minuteResolve;
+    if (tPlus1SellDate !== undefined) updated.tPlus1SellDate = tPlus1SellDate;
+    return updated;
+  });
+  if (done) setRecords(next);
+  return done;
+}
+
+/** 注册分钟线消解重试器（由 useWinRateRecorder 注入 fetchBars 后调用） */
+export function registerMinuteResolver(fn: () => Promise<void>): void {
+  minuteResolver = fn;
+}
+
+/** 启动扫描：若 resolver 已注册立即执行；否则 defer 到模块加载完成后（一次性，非定时器） */
+function scheduleStartupPendingRetry(): void {
+  if (startupScanScheduled) return;
+  startupScanScheduled = true;
+  if (minuteResolver) {
+    void minuteResolver();
+    return;
+  }
+  // resolver 尚未注册（模块加载顺序：useWinRateStore 先于 useWinRateRecorder 初始化）→ 延后到加载完成后执行
+  setTimeout(() => {
+    if (minuteResolver) void minuteResolver();
+  }, 0);
 }
 
 /** 写回 localStorage，返回是否成功（false 表示存储不可用 → storageOk 降级） */
@@ -157,7 +210,7 @@ export function useWinRateStore() {
   const updateTrade = useCallback(
     (recordId: string, patch: WinRateTradePatch): { ok: boolean; reason?: string } => {
       let done = false;
-      const { tPlus1SellDate, ...tradePatch } = patch;
+      const { tPlus1SellDate, minuteResolve, ...tradePatch } = patch;
       const next = state.map((r) => {
         if (r.id !== recordId) return r;
         if (r.trade.status === 'closed') return r; // 已平仓不可编辑
@@ -167,6 +220,8 @@ export function useWinRateStore() {
           trade: { ...r.trade, ...tradePatch },
         };
         if (tPlus1SellDate !== undefined) updated.tPlus1SellDate = tPlus1SellDate;
+        // minuteResolve 是 TradeRecord 子字段（非 WinRateRecord 顶层），单独落位
+        if (minuteResolve !== undefined) updated.trade.minuteResolve = minuteResolve;
         return updated;
       });
       if (done) setRecords(next);

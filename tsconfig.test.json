@@ -20,6 +20,7 @@
     "src/domain/strategy.ts",
     "src/lib/winrate-sim.ts",
     "src/lib/winrate-stats.ts",
+    "src/lib/winrate-minute.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

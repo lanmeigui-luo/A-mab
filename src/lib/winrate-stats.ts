@@ -230,16 +230,12 @@ function computeStrategyStats(
   const maxProfitPct = winRets.length > 0 ? round2(Math.max(...winRets)) : null;
   const maxLossPct = lossRets.length > 0 ? round2(Math.min(...lossRets)) : null;
 
-  // 日K 歧义统计：ambiguous_intraday 笔数 / 总记录数（>20% 提示胜率置信度低）
-  const ambiguousTotal = recs.filter(
-    (r) => r.trade.status === 'closed' && r.trade.sellReason === 'ambiguous_intraday',
-  ).length;
-  const ambiguousExcluded = recs.filter(
-    (r) =>
-      r.trade.status === 'closed' &&
-      r.trade.sellReason === 'ambiguous_intraday' &&
-      r.trade.excludedFromStats === true,
-  ).length;
+  // 日K / 分钟线歧义统计：ambiguous_intraday + ambiguous_1min 笔数 / 总记录数（>20% 提示胜率置信度低）
+  const isAmbiguous = (r: WinRateRecord): boolean =>
+    r.trade.status === 'closed' &&
+    (r.trade.sellReason === 'ambiguous_intraday' || r.trade.sellReason === 'ambiguous_1min');
+  const ambiguousTotal = recs.filter(isAmbiguous).length;
+  const ambiguousExcluded = recs.filter((r) => isAmbiguous(r) && r.trade.excludedFromStats === true).length;
   const ambiguityRate = total > 0 ? ambiguousTotal / total : null;
 
   return {
