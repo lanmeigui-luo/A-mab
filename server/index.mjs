@@ -913,10 +913,16 @@ async function marketTurnover() {
           `/kline/min?code=${encodeURIComponent(code)}&period=${period}&adjust=${adjust}&limit=${limit}`,
         ),
       );
-      // 统一字段名（sidecar 返回 datetime），并把日期压缩为 MM-DD HH:mm 便于绘图
+      // 统一字段名（sidecar 返回 datetime）。
+      // 注意：必须保留「年」，输出 YYYY-MM-DD HH:mm（slice(0,16) 丢弃秒），不能压成 MM-DD HH:mm。
+      // 原因：分钟线歧义消解（winrate-minute.sliceDayBars）按 candidateDay(YYYY-MM-DD) 前缀切片当日分钟序列，
+      // 若丢年 → 前缀不匹配 → 当日 bars 全空 → 真实环境下所有消歧静默失败（mock 用全格式所以没暴露）。
+      // 前端 K 线图的轴标签只用 date.slice(5)（取 MM-DD HH:mm 段），保留年不影响绘图。
+      // 防御性假设：date 格式假定东财/AkShare 返回 YYYY-MM-DD 分隔；
+      // 若上游改为斜杠 YYYY/MM/DD，需同步调整 winrate-minute.sliceDayBars 的匹配逻辑（startsWith(candidateDay + ' ') 等）。
       if (data?.ok && Array.isArray(data.rows)) {
         data.rows = data.rows.map((r) => ({
-          date: String(r.datetime ?? '').slice(5, 16),
+          date: String(r.datetime ?? '').slice(0, 16),
           open: r.open,
           close: r.close,
           high: r.high,
