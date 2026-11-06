@@ -250,6 +250,8 @@ function computeStrategyStats(
     avgHoldDays,
     profitFactor,
     invalidCount,
+    // 买入执行率：只看「能否买入」，未结算的 open 计入可执行（用户拍板口径）
+    executableRate: total > 0 ? (total - invalidCount) / total : null,
     anomalyCount,
     insufficientSample: closed < 10,
     maxDrawdown,

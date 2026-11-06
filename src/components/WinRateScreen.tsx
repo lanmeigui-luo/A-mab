@@ -85,7 +85,9 @@ function WinRateScreenInner({
   const [selected, setSelected] = useState<string[]>(enabledIds);
   const [timeRange, setTimeRange] = useState<TimeRange>('1m');
   const [holdBucket, setHoldBucket] = useState<string>('');
-  const [src, setSrc] = useState<SrcFilter>('intraday_late');
+  // 默认展示全部来源：收盘快照补拉的记录是 priceSource='close'，
+  // 旧默认值 'intraday_late' 会让这些记录在明细表里完全不可见（口径隔离提示见概览卡）。
+  const [src, setSrc] = useState<SrcFilter>('all');
   const [selectedRecord, setSelectedRecord] = useState<WinRateRecord | null>(null);
 
   const filter: WinRateFilter = useMemo(() => {

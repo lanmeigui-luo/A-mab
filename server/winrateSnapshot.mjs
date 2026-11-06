@@ -124,7 +124,8 @@ export async function runDailyWinRateSnapshot() {
   for (const def of enabled) {
     try {
       // 与前端 recordStrategy 一致：单战法过滤，使 tradePlan / score 唯一归属该战法
-      const res = await runScreen({ strategyIds: [def.id], sortBy: 'changePct', poolSize: 300 });
+      // 显式写 klineBars：自动记录链路必须拿到足量 K 线，否则首板打板等战法恒 0 命中
+      const res = await runScreen({ strategyIds: [def.id], sortBy: 'changePct', poolSize: 300, klineBars: 120 });
       if (!res.ok) {
         // trading=false（盘后数据清零）等：保护性跳过，不落盘垃圾
         errors.push(`${def.id}: ${res.reason || 'ok=false'}`);

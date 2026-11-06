@@ -20,6 +20,7 @@ export function WinRateOverviewCard({ stats, priceSourceFilter }: Props) {
   const isAll = priceSourceFilter === 'all';
   // 仅当选定具体来源时，展示另一来源作为口径对比（'all' 已并入主数字，不再重复）
   const showSplitCompare = !isAll && bd != null && (bd.intraday_late || bd.close);
+  const execRate = stats.executableRate;
 
   return (
     <div className="wr-ov">
@@ -30,6 +31,13 @@ export function WinRateOverviewCard({ stats, priceSourceFilter }: Props) {
           <span className="chip warn">日K回测歧义比例高，胜率置信度低，建议接入分钟数据</span>
         )}
       </div>
+
+      {/* 整卡级口径提示：'all' 下 computeWinRateStats 主统计仍为混算，须明确告知（底层统计逻辑不改） */}
+      {isAll && (
+        <div className="wr-ov-note">
+          混合口径 · 当前汇总了「盘中尾盘」与「收盘」两类数据来源，胜率 / 盈亏比 / 平均收益 / 最大回撤等指标可能混算，仅供参考
+        </div>
+      )}
 
       <div className="wr-ov-metrics">
         <div className="wr-ov-metric">
@@ -51,11 +59,19 @@ export function WinRateOverviewCard({ stats, priceSourceFilter }: Props) {
               pctRatio(stats.winRate)
             )}
           </div>
-          {isAll && <div className="wr-ov-sub">混合口径·仅供参考</div>}
         </div>
         <div className="wr-ov-metric">
           <div className="wr-ov-label">有效交易</div>
           <div className="wr-ov-value mono">{stats.closed}</div>
+        </div>
+        <div className="wr-ov-metric">
+          <div className="wr-ov-label">买入执行率</div>
+          <div className={`wr-ov-value mono ${execRate != null && execRate < 0.2 ? 'ret-neg' : ''}`}>
+            {execRate == null ? '—' : `${Math.round(execRate * 100)}%`}
+          </div>
+          {execRate != null && execRate < 0.2 && (
+            <div className="wr-ov-sub">实盘几乎买不进，胜率不可信</div>
+          )}
         </div>
         <div className="wr-ov-metric">
           <div className="wr-ov-label">平均收益</div>
@@ -87,6 +103,10 @@ export function WinRateOverviewCard({ stats, priceSourceFilter }: Props) {
             {pctVal(stats.maxLossPct)}
           </div>
         </div>
+      </div>
+
+      <div className="wr-ov-note">
+        买入执行率 {stats.total - stats.invalidCount}/{stats.total}（未成交 {stats.invalidCount} 笔；未结算记录计入可执行）
       </div>
 
       <div className="wr-ov-note">

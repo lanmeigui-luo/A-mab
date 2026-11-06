@@ -15,11 +15,12 @@ import { computeWinRateStats } from '../src/lib/winrate-stats';
 import {
   tradeTriggerPrice,
   tradeRuleNote,
+  tradeInvalidNote,
   tradeViewCategory,
   TRADE_VIEW_STATUS_LABELS,
 } from '../src/domain/winrate';
 import { TRADE_RULE_VERSION } from '../src/domain/winrate-config';
-import type { WinRateRecord, TradeRecord, SellReason } from '../src/domain/winrate';
+import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
 import type { KlineRow } from '../src/domain/types';
 import {
   resolveAmbiguities,
@@ -1063,6 +1064,100 @@ function runSettleGuardAssertion() {
   }
 }
 
+// ───────── 买入执行率 / 未成交文案 / 封板拦截生效（本轮新增 J1-J4） ─────────
+function runExecutionRateAssertion() {
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 12, target2: 13, holdMax: 1 };
+  const mk = (status: TradeRecord['status'], anomalies: WinRateAnomaly[] = []): WinRateRecord => {
+    const r = makeRec({ date: '2026-01-01', ...plan });
+    r.trade.status = status;
+    r.trade.anomalies = anomalies;
+    return r;
+  };
+
+  section('执行率 J1：tradeInvalidNote 各未成交原因文案');
+  {
+    check(tradeInvalidNote(mk('open', [])) === null, '非 invalid 返回 null（表格回退 tradeRuleNote）');
+    check(
+      tradeInvalidNote(mk('invalid', ['unbuyable'])) === '无行情/停牌，不可买入，未成交',
+      'unbuyable → 无行情/停牌',
+    );
+    check(
+      tradeInvalidNote(mk('invalid', ['limit_up_filled_close'])) === '尾盘封板买不进，未成交',
+      'limit_up_filled_close → 尾盘封板',
+    );
+    check(
+      tradeInvalidNote(mk('invalid', ['limit_up_unfilled'])) === '次日一字板无卖盘，未成交',
+      'limit_up_unfilled → 一字板',
+    );
+    check(
+      tradeInvalidNote(mk('invalid', ['high_open_unfilled'])) === '次日高开超出买入区间，未成交',
+      'high_open_unfilled → 高开',
+    );
+    check(
+      tradeInvalidNote(mk('invalid', ['low_close_unfilled'])) === '收盘价超出买入区间，未成交',
+      'low_close_unfilled → 收盘价',
+    );
+    check(tradeInvalidNote(mk('invalid', [])) === '未成交', '未知 invalid → 兜底未成交');
+  }
+
+  section('执行率 J2：买入执行率 = (total - invalidCount) / total');
+  {
+    const closedRec = (): WinRateRecord => {
+      const r = mk('closed');
+      r.trade.buyPrice = 10;
+      r.trade.sellPrice = 11;
+      r.trade.returnPct = 10;
+      return r;
+    };
+    // 2 closed + 1 open(未结算) + 3 invalid → total=6, invalid=3 → 0.5
+    const all = [closedRec(), closedRec(), mk('open'), mk('invalid'), mk('invalid'), mk('invalid')];
+    const s = computeWinRateStats(all, { excludeAnomaly: true }).byStrategy[0];
+    check(s.total === 6, `total=6 (实际: ${s.total})`);
+    check(s.invalidCount === 3, `invalidCount=3 (实际: ${s.invalidCount})`);
+    check(
+      s.executableRate === 0.5,
+      `买入执行率=0.5（未结算 open 计入可执行）(实际: ${s.executableRate})`,
+    );
+    const noneBuyable = Array.from({ length: 5 }, () => mk('invalid'));
+    const s2 = computeWinRateStats(noneBuyable, { excludeAnomaly: true }).byStrategy[0];
+    check(s2.executableRate === 0, `全部买不进 → 0（长期低执行率场景）(实际: ${s2.executableRate})`);
+  }
+
+  section('执行率 J3：t_next_open 次日一字板 → limit_up_unfilled 排除（封板拦截真正生效）');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_next_open';
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10.0, 10.2, 9.9, 10.0),
+      k('2026-01-02', 11.0, 11.0, 11.0, 11.0), // 次日一字板 +10%，无卖盘
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('limit_up_unfilled'), `anomaly=limit_up_unfilled (实际: ${trade.anomalies})`);
+    check(trade.buyPrice == null, '无买入价（未成交）');
+    check(
+      tradeInvalidNote({ ...rec, trade }) === '次日一字板无卖盘，未成交',
+      '一字板未成交文案正确',
+    );
+  }
+
+  section('执行率 J4：t_next_open 收盘封板但开盘可买 → 正常成交（不误判 invalid）');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_next_open';
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10.0, 10.2, 9.9, 10.0),
+      k('2026-01-02', 10.2, 11.0, 10.0, 11.0), // 收盘涨停，但开盘 10.2 在买入区间内 → 可买进
+      k('2026-01-03', 11.0, 11.2, 10.8, 11.1),
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status !== 'invalid', `不误判 invalid (实际: ${trade.status})`);
+    check(trade.buyPrice === 10.2, `买入价=开盘 10.2 (实际: ${trade.buyPrice})`);
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1073,6 +1168,7 @@ async function main() {
   runBuyTimingAssertion();
   runRecordedCategoryAssertion();
   runSettleGuardAssertion();
+  runExecutionRateAssertion();
   await runMinuteAssertions();
   runMinuteStatsAssertion();
 

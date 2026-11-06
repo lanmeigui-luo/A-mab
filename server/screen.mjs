@@ -321,7 +321,9 @@ async function mapLimit(arr, limit, fn) {
 export async function runScreen({
   sortBy = 'changePct',
   poolSize = 100,
-  klineBars = 60,
+  // 120 根：首板打板的「非次新股」gate 要求 ind.bars>=100，60 根时该 gate 恒失败导致战法 0 命中。
+  // 实测 300 只候选 / 120 根耗时 39.2s（60 根 76.9s），未暴增；改动覆盖 /api/screen 与收盘快照两条链路。
+  klineBars = 120,
   concurrency = 6,
   strategyIds = null,
   codes = null,

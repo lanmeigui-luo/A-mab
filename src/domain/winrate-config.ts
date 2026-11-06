@@ -82,7 +82,7 @@ interface RawDef {
 /** 已核对的后端 STRATEGY_DEFS 子集（id / name / holding / available / 规则说明） */
 const RAW_DEFS: RawDef[] = [
   { id: 'first-board', name: '首板打板', holding: '次日', available: true, buyTiming: 't_close', ruleNote: '次日冲高或封板走弱即离场，持股 ≤1 个交易日' },
-  { id: 'board-advance', name: '连板晋级', holding: '次日', available: true, buyTiming: 't_close', ruleNote: '次日换手晋级失败即离场，持股 ≤1 个交易日' },
+  { id: 'board-advance', name: '连板晋级', holding: '次日', available: true, buyTiming: 't_next_open', ruleNote: '次日换手晋级失败即离场，持股 ≤1 个交易日' },
   { id: 'trend-break', name: '趋势突破', holding: '5-20 天', available: true, buyTiming: 't_next_open', ruleNote: '突破后沿趋势持有 5-20 个交易日，跌破关键支撑离场' },
   { id: 'ma-bull', name: '均线多头', holding: '10-30 天', available: true, buyTiming: 't_next_open', ruleNote: '均线多头排列中持有 10-30 个交易日，均线走坏离场' },
   { id: 'dragon', name: '龙头战法', holding: '1-5 天', available: true, buyTiming: 't_close', ruleNote: '龙头主升持有 1-5 个交易日，断板即走' },

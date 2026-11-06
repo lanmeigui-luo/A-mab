@@ -6,6 +6,7 @@ import {
   ANOMALY_LABELS,
   tradeTriggerPrice,
   tradeRuleNote,
+  tradeInvalidNote,
   tradeViewCategory,
   type TradeViewCategory,
 } from '../domain/winrate';
@@ -159,11 +160,12 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                     </td>
                     <td>{SELL_REASON_LABELS[r.trade.sellReason]}</td>
                     <td className="wr-rule-note">
-                      {category === 'recorded'
-                        ? r.buyTiming === 't_close'
-                          ? '记录日尾盘买入（收盘价待定）'
-                          : '次日开盘买入'
-                        : tradeRuleNote(r)}
+                      {tradeInvalidNote(r) ??
+                        (category === 'recorded'
+                          ? r.buyTiming === 't_close'
+                            ? '记录日尾盘买入（收盘价待定）'
+                            : '次日开盘买入'
+                          : tradeRuleNote(r))}
                     </td>
                     <td>
                       <span className={`wr-status wr-status-${category}`}>

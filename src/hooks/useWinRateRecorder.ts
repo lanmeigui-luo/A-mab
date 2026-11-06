@@ -193,7 +193,9 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
     const cfg = getWinRateConfig(strat.strategyId);
     if (!cfg) continue; // 后端有但前端配置未映射的战法：跳过，不写脏数据
     for (const h of strat.hits) {
-      const unbuyable = h.limitUp?.isLimitUp === true || h.price == null;
+      // 仅行情缺失（停牌/退市/无报价）判不可买入；涨停票照常生成 open 记录，
+      // 交由结算侧 simulateTrade 按 buyTiming 判定封板/一字板/高开未成交。
+      const unbuyable = h.price == null;
       const trade: TradeRecord = {
         buyDate: null,
         buyPrice: null,
@@ -226,6 +228,9 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
         holdDays: cfg.holdDays,
         tPlus1SellDate: null, // 由结算逻辑重算
         paramVersion: cfg.paramVersion,
+        // 快照记录必须继承战法配置的买入时机，否则会一律按默认 t_next_open 模拟，
+        // 与 t_close 战法（首板打板/龙头/隔夜持股）配置相悖。
+        buyTiming: cfg.buyTiming,
         ruleVersion: TRADE_RULE_VERSION,
         backfilled: isHistorical,
         recordedAt,
@@ -376,8 +381,10 @@ export function useWinRateRecorder() {
         const recordedAt = new Date().toISOString();
         const created: WinRateRecord[] = [];
         for (const hit of top) {
-          // 记录日不可买入：涨停或行情缺失 → invalid + unbuyable，不进分母（不模拟）
-          const unbuyable = hit.limitUp?.isLimitUp === true || hit.price == null;
+          // 仅行情缺失（停牌/退市/无报价）判不可买入；涨停票一律生成 open 记录，
+          // 交由结算侧 simulateTrade 按 buyTiming 判定（t_close 封板 / t_next_open 一字板、高开）。
+          // 旧逻辑把涨停票在记录生成时直接标 invalid，导致这些记录永不结算、封板拦截形同虚设。
+          const unbuyable = hit.price == null;
           let tPlus1: string | null = null;
           const anomalies: WinRateAnomaly[] = [];
           if (!unbuyable) {

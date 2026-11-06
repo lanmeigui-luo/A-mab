@@ -167,6 +167,24 @@ export function tradeRuleNote(record: WinRateRecord): string {
   return s;
 }
 
+/**
+ * 未成交记录的执行规则说明（UI 唯一出处，纯函数便于离线验收）。
+ * 仅对 status==='invalid' 返回具体中文原因；其余返回 null，由调用方回退到 tradeRuleNote。
+ * 注意：anomaly='unbuyable' 自「收窄 unbuyable」起仅表示停牌/退市/无行情，
+ * 涨停封板未成交由 limit_up_filled_close（t_close）/ limit_up_unfilled（t_next_open 一字板）表达。
+ */
+export function tradeInvalidNote(record: WinRateRecord): string | null {
+  if (record.trade.status !== 'invalid') return null;
+  const a = record.trade.anomalies;
+  if (a.includes('unbuyable')) return '无行情/停牌，不可买入，未成交';
+  if (a.includes('limit_up_filled_close')) return '尾盘封板买不进，未成交';
+  if (a.includes('limit_up_unfilled')) return '次日一字板无卖盘，未成交';
+  if (a.includes('high_open_unfilled')) return '次日高开超出买入区间，未成交';
+  if (a.includes('high_close_unfilled') || a.includes('low_close_unfilled'))
+    return '收盘价超出买入区间，未成交';
+  return '未成交';
+}
+
 /** 交易状态中文文案（数据层 status 的 UI 唯一出处） */
 export const TRADE_STATUS_LABELS: Record<TradeStatus, string> = {
   open: '持仓中',
@@ -348,8 +366,15 @@ export interface WinRateStats {
   avgHoldDays: number | null;
   /** 盈亏比（总盈利 / 总亏损绝对值）；无亏损为 null */
   profitFactor: number | null;
-  /** 信号失效数 */
+  /** 信号失效数（status==='invalid'；实盘买不进的记录） */
   invalidCount: number;
+  /**
+   * 买入执行率 = (total - invalidCount) / total；无记录为 null。
+   * 衡量「选出来的票里有多少实盘真能买进」，只与能否买入有关：
+   * 尚未结算的 open（已记录/持仓中）计入可执行，不因未平仓被误判为买不进。
+   * 长期 < 0.2 说明该战法实盘几乎买不进，胜率再高也不可信。
+   */
+  executableRate: number | null;
   /** 异常标注数（含任意 anomaly 的记录数） */
   anomalyCount: number;
   /** 有效样本不足（closed < 10）标记；true 时胜率仅供参考 */
