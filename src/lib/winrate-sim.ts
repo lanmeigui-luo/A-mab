@@ -8,18 +8,25 @@
  * ───────────────────────────────────────────────────────────────────────
  * 核心规则（写在此处为唯一口径来源）：
  *
- * 【T+1 买入】
- *  - A 股 T+1：记录日(date)当日不可买入，买入发生在「记录日下一交易日」(buyDay)。
- *  - 买入价 = buyDay 开盘价（次日开盘价成交）。
- *  - T+1 可卖日(tPlus1SellDate) = buyDay 的下一交易日（即买入后首个可卖出日）。
+ * 【买入时机 buyTiming】支持两种时机（由 WinRateRecord.buyTiming 决定，缺省 t_next_open）：
+ *  - t_next_open（次日开盘买入，默认）：
+ *      · 买入日 = 记录日下一交易日(buyDay)；买入价 = buyDay 开盘价。
+ *      · 未成交 → status=invalid：高开未成交(high_open_unfilled) / 一字涨停未成交(limit_up_unfilled) /
+ *        开盘即≥目标一(high_open_over_target1) / 次新股跳过一字板判定(new_stock_no_limit_check 软提示)。
+ *  - t_close（记录日当天收盘买入）：
+ *      · 买入日 = 记录日自身(buyDay = record.date)；买入价 = 记录日收盘价。
+ *      · 未成交 → status=invalid：收盘低于买低(low_close_unfilled) / 收盘高于买高(high_close_unfilled)。
+ *      · 不执行一字板/高开判定（入场价是收盘价，无跳空）。
+ *  - A 股 T+1：首次可卖出日 = 买入日下一交易日；两种时机统一 tPlus1SellDate = buyIdx + 1。
  *  - 交易日历 = K 线日期序列（本引擎不依赖任何外部日历工具）。
  *
  * 【未成交 → 信号失效(invalid)】
  *  - 次日开盘价 > buyHigh → 高开未成交：status=invalid, anomaly='high_open_unfilled'。
  *  - 次日一字涨停（open==high==low==close 且达到涨停容差）：status=invalid, anomaly='limit_up_unfilled'。
- *    （一字板判定优先于高开判定，避免把一字板误标成普通高开。）
+ *    （一字板判定优先于高开判定，避免把一字板误标成普通高开；仅 t_next_open 时机执行。）
  *  - 涨停判定仅在「非次新股」时执行；次新股（记录日前 K 线 < 5 根）仍可买入（按开盘价正常成交），
  *    仅涨停判定因历史不足不可靠，故跳过一字板判定并标注 anomaly='new_stock_no_limit_check'（软提示，不使信号失效）。
+ *  - 收盘买入时机(t_close)：记录日收盘 < buyLow → low_close_unfilled；> buyHigh → high_close_unfilled。
  *
  * 【涨停幅度 limitPct 映射】（按代码前缀 + ST 状态）
  *  - 60/00 主板：非 ST 0.10，ST 0.05
@@ -71,7 +78,7 @@
  * 【不可变】status 已为 'closed' 的记录原样返回（已平仓不可改）。
  */
 
-import type { WinRateRecord, TradeRecord, WinRateAnomaly, SellReason } from '../domain/winrate';
+import type { WinRateRecord, TradeRecord, WinRateAnomaly, SellReason, BuyTiming } from '../domain/winrate';
 import type { KlineRow, MinuteRow } from '../domain/types';
 import { TRADE_RULE_VERSION } from '../domain/winrate-config';
 
@@ -145,6 +152,14 @@ function firstIndexAfter(klines: KlineRow[], date: string): number {
   return -1;
 }
 
+/** 取指定日期在 K 线中的索引（记录日当天收盘买入 t_close 用）；不存在返回 -1 */
+function indexOfDate(klines: KlineRow[], date: string): number {
+  for (let i = 0; i < klines.length; i++) {
+    if (klines[i].date === date) return i;
+  }
+  return -1;
+}
+
 /** 深拷贝入参 trade（保证不修改原对象） */
 function cloneTrade(t: TradeRecord): TradeRecord {
   return {
@@ -206,90 +221,145 @@ export function simulateTrade(
   const isST = options.isST ?? isSTFromName(record.name);
   const code = record.code;
 
-  // 定位买入日（记录日下一交易日）
-  const buyIdx = firstIndexAfter(dailyK, record.date);
+  // ── 定位买入日（按买入时机 buyTiming 分支）────────────────────────────
+  const buyTiming: BuyTiming = record.buyTiming ?? 't_next_open';
+  const buyIdx =
+    buyTiming === 't_close'
+      ? indexOfDate(dailyK, record.date) // 记录日当天收盘买入：买入日 = 记录日本身
+      : firstIndexAfter(dailyK, record.date); // 次日开盘买入：买入日 = 记录日下一交易日
   if (buyIdx < 0) {
+    // 无法定位买入日：t_close 时记录日不在 K 线中；t_next_open 时记录日后无交易日
     trade.status = 'anomaly';
     trade.anomalies = ['data_missing'];
     return { trade, tPlus1SellDate: null };
   }
 
-  // 次新股：记录日前 K 线 < 5 根 → 跳过一字板判定（historyBefore 以买入日前 K 线根数近似）
-  const historyBefore = buyIdx;
-  const skipLimitUpCheck = historyBefore < 5;
-  const anomalies: WinRateAnomaly[] = [];
-  if (skipLimitUpCheck) {
-    anomalies.push('new_stock_no_limit_check');
-  }
-
   const buyDayK = dailyK[buyIdx];
+  const buyDate = buyDayK.date;
+  const anomalies: WinRateAnomaly[] = [];
 
-  // 买入当日开盘价已 ≥ 目标一：计划失效（无法以低于目标的价格入场）→ 未成交。
-  // 优先级高于普通「高开未成交」：open≥target1 一定意味着 open>buyHigh（参数校验保证 bugh<t1），
-  // 故此处先判定，使 high_open_over_target1 这个专属异常可被触发（否则会被 high_open_unfilled 抢先返回）。
-  const overTarget1 = record.target1 != null && buyDayK.open >= record.target1;
-
-  if (!skipLimitUpCheck) {
+  // ── 未成交判定 + 成交价（按买入时机分支）─────────────────────────────
+  let buyPrice: number;
+  if (buyTiming === 't_close') {
+    // 封板拦截（尾盘涨停封死，实盘买不进 → 排除分母）：
+    // 记录日收盘封死涨停（close===high 且涨幅达涨停限制）时，不能按收盘价强行买入，否则胜率虚高（幸存者偏差）。
+    // 复用既有 getLimitPct（按代码前缀区分主板 10% / 创业板·科创板 20% / 北交所 30%；ST 主板 5%）与 LIMIT_TOLERANCE 容差。
+    const historyBefore = buyIdx; // 记录日之前 K 线根数
+    const skipLimitUpCheck = historyBefore < 5; // 次新股：历史不足，跳过封板判定（沿用既有约定）
+    if (skipLimitUpCheck) {
+      anomalies.push('new_stock_no_limit_check');
+    }
     const prevK = dailyK[buyIdx - 1];
-    if (prevK) {
+    if (!skipLimitUpCheck && prevK) {
       const prevClose = prevK.close;
       const limitPct = getLimitPct(code, isST);
       const changeRate = (buyDayK.close - prevClose) / prevClose;
-      const isLimitUp =
-        changeRate >= limitPct - LIMIT_TOLERANCE &&
-        buyDayK.open === buyDayK.high &&
-        buyDayK.high === buyDayK.low &&
-        buyDayK.low === buyDayK.close;
-      if (isLimitUp) {
-        // 一字板未成交（优先于普通高开）
+      const sealedLimitUp = buyDayK.close === buyDayK.high && changeRate >= limitPct - LIMIT_TOLERANCE;
+      if (sealedLimitUp) {
         trade.status = 'invalid';
-        trade.buyDate = buyDayK.date;
+        trade.buyDate = buyDate;
         trade.buyPrice = null;
         trade.sellReason = 'unknown';
-        trade.anomalies = ['limit_up_unfilled'];
+        trade.anomalies = ['limit_up_filled_close'];
+        trade.excludedFromStats = true;
         return { trade, tPlus1SellDate: null };
       }
+    }
+    // 未封板：以收盘价判定是否落入买入区间 [buyLow, buyHigh]
+    const close = buyDayK.close;
+    if (record.buyLow != null && close < record.buyLow) {
+      trade.status = 'invalid';
+      trade.buyDate = buyDate;
+      trade.buyPrice = null;
+      trade.sellReason = 'unknown';
+      trade.anomalies = ['low_close_unfilled'];
+      return { trade, tPlus1SellDate: null };
+    }
+    if (record.buyHigh != null && close > record.buyHigh) {
+      trade.status = 'invalid';
+      trade.buyDate = buyDate;
+      trade.buyPrice = null;
+      trade.sellReason = 'unknown';
+      trade.anomalies = ['high_close_unfilled'];
+      return { trade, tPlus1SellDate: null };
+    }
+    buyPrice = close;
+  } else {
+    // 次日开盘买入：以次日开盘价判定
+    // 次新股：记录日前 K 线 < 5 根 → 跳过一字板判定
+    const historyBefore = buyIdx;
+    const skipLimitUpCheck = historyBefore < 5;
+    if (skipLimitUpCheck) {
+      anomalies.push('new_stock_no_limit_check');
+    }
+
+    // 买入当日开盘价已 ≥ 目标一：计划失效（无法以低于目标的价格入场）→ 未成交。
+    // 优先级高于普通「高开未成交」：open≥target1 一定意味着 open>buyHigh（参数校验保证 bugh<t1），
+    // 故此处先判定，使 high_open_over_target1 这个专属异常可被触发（否则会被 high_open_unfilled 抢先返回）。
+    const overTarget1 = record.target1 != null && buyDayK.open >= record.target1;
+
+    if (!skipLimitUpCheck) {
+      const prevK = dailyK[buyIdx - 1];
+      if (prevK) {
+        const prevClose = prevK.close;
+        const limitPct = getLimitPct(code, isST);
+        const changeRate = (buyDayK.close - prevClose) / prevClose;
+        const isLimitUp =
+          changeRate >= limitPct - LIMIT_TOLERANCE &&
+          buyDayK.open === buyDayK.high &&
+          buyDayK.high === buyDayK.low &&
+          buyDayK.low === buyDayK.close;
+        if (isLimitUp) {
+          // 一字板未成交（优先于普通高开）
+          trade.status = 'invalid';
+          trade.buyDate = buyDate;
+          trade.buyPrice = null;
+          trade.sellReason = 'unknown';
+          trade.anomalies = ['limit_up_unfilled'];
+          return { trade, tPlus1SellDate: null };
+        }
+        if (overTarget1) {
+          trade.status = 'invalid';
+          trade.buyDate = buyDate;
+          trade.buyPrice = null;
+          trade.sellReason = 'unknown';
+          trade.anomalies = ['high_open_over_target1'];
+          return { trade, tPlus1SellDate: null };
+        }
+        // 高开未成交（仅高于买入区间上限，但低于目标一）
+        if (record.buyHigh != null && buyDayK.open > record.buyHigh) {
+          trade.status = 'invalid';
+          trade.buyDate = buyDate;
+          trade.buyPrice = null;
+          trade.sellReason = 'unknown';
+          trade.anomalies = ['high_open_unfilled'];
+          return { trade, tPlus1SellDate: null };
+        }
+      }
+    } else {
       if (overTarget1) {
         trade.status = 'invalid';
-        trade.buyDate = buyDayK.date;
+        trade.buyDate = buyDate;
         trade.buyPrice = null;
         trade.sellReason = 'unknown';
         trade.anomalies = ['high_open_over_target1'];
         return { trade, tPlus1SellDate: null };
       }
-      // 高开未成交（仅高于买入区间上限，但低于目标一）
+      // 次新股：仅做普通高开未成交判定（不做一字板判定）
       if (record.buyHigh != null && buyDayK.open > record.buyHigh) {
         trade.status = 'invalid';
-        trade.buyDate = buyDayK.date;
+        trade.buyDate = buyDate;
         trade.buyPrice = null;
         trade.sellReason = 'unknown';
         trade.anomalies = ['high_open_unfilled'];
         return { trade, tPlus1SellDate: null };
       }
     }
-  } else {
-    if (overTarget1) {
-      trade.status = 'invalid';
-      trade.buyDate = buyDayK.date;
-      trade.buyPrice = null;
-      trade.sellReason = 'unknown';
-      trade.anomalies = ['high_open_over_target1'];
-      return { trade, tPlus1SellDate: null };
-    }
-    // 次新股：仅做普通高开未成交判定（不做一字板判定）
-    if (record.buyHigh != null && buyDayK.open > record.buyHigh) {
-      trade.status = 'invalid';
-      trade.buyDate = buyDayK.date;
-      trade.buyPrice = null;
-      trade.sellReason = 'unknown';
-      trade.anomalies = ['high_open_unfilled'];
-      return { trade, tPlus1SellDate: null };
-    }
+
+    buyPrice = buyDayK.open;
   }
 
-  // 正常成交
-  const buyPrice = buyDayK.open;
-  const buyDate = buyDayK.date;
+  // 正常成交（两种时机共用）
   trade.buyDate = buyDate;
   trade.buyPrice = buyPrice;
   trade.status = 'open';
@@ -298,8 +368,9 @@ export function simulateTrade(
   const sellStartIdx = buyIdx + 1;
   const tPlus1SellDate = sellStartIdx < dailyK.length ? dailyK[sellStartIdx].date : null;
   if (tPlus1SellDate == null) {
-    trade.status = 'anomaly';
-    trade.anomalies = ['data_missing'];
+    // 买入后无后续交易日（K 线在买入日截断）：持仓中，保留 buyDate/buyPrice，等待数据补齐，不标 data_missing。
+    // 结算侧 settleOpenRecords 也会因此跳过（buyIdx+1 >= length），保持 status='open' 直到 T+1 K 线产生。
+    trade.status = 'open';
     return { trade, tPlus1SellDate: null };
   }
 
@@ -453,7 +524,14 @@ export function simulateTrade(
   }
 
   if (sellDayIdx < 0) {
-    // 扫描耗尽仍未平仓 → 数据缺失
+    // 扫描耗尽仍未平仓：
+    //  - 已成交（持仓中）→ 维持 status='open'，保留 buyDate/buyPrice，等待后续结算（tPlus1SellDate 已给出）。
+    //  - 未成交（buyDate 仍为空）→ 视为数据缺失 anomaly。
+    if (trade.buyDate != null) {
+      trade.status = 'open';
+      trade.anomalies = anomalies; // 保留次新股等软提示
+      return { trade, tPlus1SellDate };
+    }
     trade.status = 'anomaly';
     trade.anomalies = ['data_missing'];
     return { trade, tPlus1SellDate };

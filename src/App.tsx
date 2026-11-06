@@ -212,7 +212,10 @@ export default function App() {
             onOpenKline={(fullCode, name) => setDetail({ fullCode, name })}
           />
         ) : tab === 'winrate' ? (
-          <WinRateScreen />
+          <WinRateScreen
+            onOpenKline={(fullCode, name) => setDetail({ fullCode, name })}
+            onCloseKline={() => setDetail(null)}
+          />
         ) : (
           <CapabilityMatrix />
         )}

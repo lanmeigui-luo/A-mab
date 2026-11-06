@@ -1448,6 +1448,17 @@ button.idx-card:hover {
   white-space: nowrap;
 }
 .wr-status-open { background: #eef2ff; color: var(--accent); }
+
+.wr-open-banner {
+  margin: 10px 0 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: var(--accent);
+  border: 1px solid #c7d2fe;
+  font-size: 13px;
+  font-weight: 500;
+}
 .wr-status-closed { background: #f3f4f6; color: var(--muted); }
 .wr-status-invalid { background: #f3f4f6; color: var(--muted-2); }
 .wr-status-anomaly { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); }

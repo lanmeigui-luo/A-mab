@@ -722,6 +722,190 @@ function runMinuteStatsAssertion() {
   check(s.winRate === 1, `winRate=1（唯一有效笔盈利）(实际: ${s.winRate})`);
 }
 
+// ───────── 买入时机（t_close / t_next_open）验收（Phase B） ─────────
+function runBuyTimingAssertion() {
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 11, target2: 12 };
+
+  // 用例A：t_close（记录日收盘买入）——收盘价落入买入区间 → 以收盘价成交，T+1 次日卖出
+  section('买入时机A：t_close 记录日收盘买入（成交）');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_close';
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10.2, 10.4, 10.1, 10.3), // 记录日=买入日：收盘 10.3 ∈ [10,10.5] → 买入价 10.3
+      k('2026-01-02', 10.4, 11.6, 10.3, 11.4), // T+1 首可卖日：盘中 high≥target1 11 → target1
+    ];
+    const { trade, tPlus1SellDate } = simulateTrade(rec, daily);
+    check(trade.status === 'closed', `status=closed (实际: ${trade.status})`);
+    check(trade.buyDate === '2026-01-01', `买入日期=记录日 2026-01-01 (实际: ${trade.buyDate})`);
+    check(trade.buyPrice === 10.3, `买入价=记录日收盘 10.3 (实际: ${trade.buyPrice})`);
+    check(trade.sellDate === '2026-01-02', `卖出日期=T+1 次日（≠买入日）(实际: ${trade.sellDate})`);
+    check(trade.sellReason === 'target1', `sellReason=target1（T+1 盘中触目标一）(实际: ${trade.sellReason})`);
+    check(trade.holdDays === 1, `持有天数=1 个交易日 (实际: ${trade.holdDays})`);
+    check(tPlus1SellDate === '2026-01-02', `tPlus1SellDate=2026-01-02 (实际: ${tPlus1SellDate})`);
+  }
+
+  // 用例A2：t_close 收盘高于买高 → 未成交(high_close_unfilled)
+  section('买入时机A2：t_close 收盘高于买高 → 失效(high_close_unfilled)');
+  {
+    const rec = makeRec({ date: '2026-01-01', buyLow: 9.5, buyHigh: 10.0, stop: 9, target1: 11, target2: 12 });
+    rec.buyTiming = 't_close';
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10.2, 10.4, 10.1, 10.3), // 收盘 10.3 > 买高 10.0 → 未成交
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('high_close_unfilled'), `anomaly=high_close_unfilled (实际: ${trade.anomalies})`);
+    check(trade.buyPrice == null, '无买入价（未成交）');
+  }
+
+  // 用例A3：t_close 收盘低于买低 → 未成交(low_close_unfilled)
+  section('买入时机A3：t_close 收盘低于买低 → 失效(low_close_unfilled)');
+  {
+    const rec = makeRec({ date: '2026-01-01', buyLow: 10.5, buyHigh: 11.5, stop: 9, target1: 12, target2: 13 });
+    rec.buyTiming = 't_close';
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10.2, 10.4, 10.1, 10.3), // 收盘 10.3 < 买低 10.5 → 未成交
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('low_close_unfilled'), `anomaly=low_close_unfilled (实际: ${trade.anomalies})`);
+    check(trade.buyPrice == null, '无买入价（未成交）');
+  }
+
+  // 用例B：t_next_open（次日开盘买入，显式指定）——以次日开盘价成交（≠收盘价）
+  section('买入时机B：t_next_open 次日开盘买入（默认行为）');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_next_open';
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10, 10, 10, 10),
+      k('2026-01-02', 10.2, 10.4, 10.1, 10.5), // 买入日：开盘 10.2（≠收盘 10.5）
+      k('2026-01-03', 11.5, 11.6, 11.2, 11.4), // T+1：盘中触目标一
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'closed', `status=closed (实际: ${trade.status})`);
+    check(trade.buyDate === '2026-01-02', `买入日期=记录日次日 2026-01-02 (实际: ${trade.buyDate})`);
+    check(trade.buyPrice === 10.2, `买入价=次日开盘 10.2（≠收盘 10.5）(实际: ${trade.buyPrice})`);
+    check(trade.sellDate === '2026-01-03', `卖出日期=T+1 次日 (实际: ${trade.sellDate})`);
+  }
+
+  // 用例C1：t_close 的 T+1 约束——买入日（记录日）当日即使双边触及，也不得当日卖出；须等到 T+1
+  section('买入时机C1：t_close T+1 约束（买入当日不卖出）');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_close';
+    const daily = [
+      ...HIST,
+      // 买入日（记录日）：收盘 10.3∈区间→买入；但当日 high≥target1 且 low≤stop（双边触及）——不得当日卖
+      k('2026-01-01', 10.2, 11.5, 8.0, 10.3),
+      // T+1 首可卖日：开盘 11.5≥target1 11 → 开盘跳空 target1_gap，于 T+1 成交（非买入日）
+      k('2026-01-02', 11.5, 11.6, 11.2, 11.4),
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'closed', `status=closed (实际: ${trade.status})`);
+    check(trade.buyDate === '2026-01-01', `买入日期=记录日 (实际: ${trade.buyDate})`);
+    check(trade.sellDate === '2026-01-02', `卖出日期=T+1 次日，≠买入日（T+1 约束）(实际: ${trade.sellDate})`);
+    check(trade.sellReason === 'target1_gap', `sellReason=target1_gap（T+1 开盘跳空）(实际: ${trade.sellReason})`);
+    check(trade.holdDays === 1, `持有天数=1（买入日→T+1）(实际: ${trade.holdDays})`);
+  }
+
+  // 用例C2：t_next_open 的 T+1 约束——买入日（次日）即使双边触及，也不得当日卖出；须等到 T+1
+  section('买入时机C2：t_next_open T+1 约束（买入当日不卖出）');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_next_open';
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10, 10, 10, 10),
+      // 买入日（次日）：开盘 10.2∈区间→买入；当日 high≥target1 且 low≤stop（双边触及）——不得当日卖
+      k('2026-01-02', 10.2, 11.5, 8.0, 10.3),
+      // T+1 首可卖日：开盘 11.5≥target1 11 → 开盘跳空 target1_gap，于 T+1 成交（非买入日）
+      k('2026-01-03', 11.5, 11.6, 11.2, 11.4),
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'closed', `status=closed (实际: ${trade.status})`);
+    check(trade.buyDate === '2026-01-02', `买入日期=记录日次日 (实际: ${trade.buyDate})`);
+    check(trade.sellDate === '2026-01-03', `卖出日期=T+1 次日，≠买入日（T+1 约束）(实际: ${trade.sellDate})`);
+    check(trade.sellReason === 'target1_gap', `sellReason=target1_gap（T+1 开盘跳空）(实际: ${trade.sellReason})`);
+    check(trade.holdDays === 1, `持有天数=1（买入日→T+1）(实际: ${trade.holdDays})`);
+  }
+
+  // 用例D：t_close 买入后 K 线不足以平仓（无 T+1 日）→ 维持 open，保留 buyDate/buyPrice
+  section('买入时机D：t_close 买入后无后续可卖日 → 持仓中(open)，保留买入信息');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_close';
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10.2, 10.4, 10.1, 10.3), // 记录日=买入日：收盘 10.3 买入，无后续 K → 无法平仓
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'open', `status=open（持仓中，非 data_missing）(实际: ${trade.status})`);
+    check(trade.buyDate === '2026-01-01', `买入日期已落盘 (实际: ${trade.buyDate})`);
+    check(trade.buyPrice === 10.3, `买入价已落盘 (实际: ${trade.buyPrice})`);
+  }
+
+  // 用例E：t_close 封板拦截（主板 10%）——记录日收盘封死涨停（close===high 且涨幅≥10%）→ 未成交(limit_up_filled_close)，排除分母
+  // （主板的 plan buyHigh=10.5，收盘11.0本应判 high_close_unfilled；但封板拦截优先级更高，应先判 limit_up_filled_close）
+  section('买入时机E：t_close 封板拦截（主板10%，收盘封死涨停→排除分母）');
+  {
+    const rec = makeRec({ date: '2026-01-01', code: '600000', ...plan }); // 主板，非ST → 10% 涨停
+    rec.buyTiming = 't_close';
+    const daily = [
+      ...HIST,
+      // 记录日=买入日：开盘10.5、最高11.0、最低10.4、收盘11.0（close===high，较前一交易日10.0涨10%→封板涨停封死）
+      k('2026-01-01', 10.5, 11.0, 10.4, 11.0),
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('limit_up_filled_close'), `anomaly=limit_up_filled_close (实际: ${trade.anomalies})`);
+    check(trade.buyPrice == null, '无买入价（未成交）');
+    check(trade.excludedFromStats === true, `excludedFromStats=true（排除分母）(实际: ${trade.excludedFromStats})`);
+  }
+
+  // 用例E2：t_close 封板拦截（创业板 20%）——验证 getLimitPct 按代码前缀区分 10%/20%
+  section('买入时机E2：t_close 封板拦截（创业板20%，收盘封死涨停→排除分母）');
+  {
+    const rec = makeRec({ date: '2026-01-01', code: '300001', ...plan }); // 创业板 → 20% 涨停
+    rec.buyTiming = 't_close';
+    const daily = [
+      ...HIST,
+      // 记录日=买入日：收盘12.0===high，较前一交易日10.0涨20%→封板涨停封死（创业板20%）
+      k('2026-01-01', 11.0, 12.0, 11.0, 12.0),
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('limit_up_filled_close'), `anomaly=limit_up_filled_close (实际: ${trade.anomalies})`);
+    check(trade.buyPrice == null, '无买入价（未成交）');
+    check(trade.excludedFromStats === true, `excludedFromStats=true（排除分母）(实际: ${trade.excludedFromStats})`);
+  }
+
+  // 用例F：t_close 烂板买入——记录日盘中触及涨停但收盘回落（close<涨停价，close!==high）→ 不封板，按收盘价成交
+  section('买入时机F：t_close 烂板买入（盘中触涨停但收盘回落→按收盘价成交）');
+  {
+    const rec = makeRec({ date: '2026-01-01', buyLow: 10, buyHigh: 11, stop: 9, target1: 12, target2: 13, holdMax: 1 });
+    rec.buyTiming = 't_close';
+    const daily = [
+      ...HIST,
+      // 记录日=买入日：盘中最高11.2（触及涨停），但收盘10.8<涨停价11.0（close!==high）→ 烂板，不封板
+      k('2026-01-01', 10.5, 11.2, 10.3, 10.8),
+      // T+1：无触发（low10.7>stop9, high10.9<target1 12），持有满1日→hold_expired 平仓
+      k('2026-01-02', 10.8, 10.9, 10.7, 10.85),
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'closed', `status=closed（封板拦截未触发，已成交）(实际: ${trade.status})`);
+    check(trade.buyPrice === 10.8, `买入价=记录日收盘 10.8（≠开盘 10.5）(实际: ${trade.buyPrice})`);
+    check(trade.buyDate === '2026-01-01', `买入日期=记录日 (实际: ${trade.buyDate})`);
+    check(!trade.anomalies.includes('limit_up_filled_close'), `anomaly 不含 limit_up_filled_close（烂板不拦截）(实际: ${trade.anomalies})`);
+    check(trade.sellReason === 'hold_expired', `sellReason=hold_expired（T+1到期平仓）(实际: ${trade.sellReason})`);
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -729,6 +913,7 @@ async function main() {
   runCases();
   runStatsAssertion();
   runHelperAssertion();
+  runBuyTimingAssertion();
   await runMinuteAssertions();
   runMinuteStatsAssertion();
 

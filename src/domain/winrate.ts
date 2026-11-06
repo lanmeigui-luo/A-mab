@@ -20,6 +20,9 @@ export type TradeStatus =
   | 'invalid' // 信号失效（v1 仅留接口，引擎后续判定）
   | 'anomaly'; // 数据异常（如价格缺失），仅标记不计入正常胜率
 
+/** 买入时机：t_close=记录日收盘买入；t_next_open=记录日次日开盘买入（默认） */
+export type BuyTiming = 't_close' | 't_next_open';
+
 /**
  * 卖出原因。
  * 时间语义（v2-t1-fix 起唯一口径）：A 股 T+1，买入后首个可交易日才能卖；
@@ -54,7 +57,10 @@ export type SellReason =
  */
 export type WinRateAnomaly =
   | 'high_open_unfilled' // 次日高开，未成交
+  | 'high_close_unfilled' // 记录日收盘高于买高，未成交
+  | 'low_close_unfilled' // 记录日收盘低于买低，未成交
   | 'limit_up_unfilled' // 次日一字涨停，未成交
+  | 'limit_up_filled_close' // t_close 记录日收盘封板涨停，未成交（实盘买不进，排除分母）
   | 'unbuyable' // 不可买入（如已退市）
   | 'suspended_deferred' // 停牌顺延（按 suspensionRanges 跳过）
   | 'suspended_volume_zero' // 停牌顺延兜底（volume=0）
@@ -68,7 +74,10 @@ export type WinRateAnomaly =
 /** 异常标注中文文案（唯一出处；逻辑层只用 key） */
 export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
   high_open_unfilled: '高开未成交',
+  high_close_unfilled: '收盘高于买高(未成交)',
+  low_close_unfilled: '收盘低于买低(未成交)',
   limit_up_unfilled: '一字板未成交',
+  limit_up_filled_close: '封板涨停未成交(排除)',
   unbuyable: '不可买入',
   suspended_deferred: '停牌顺延',
   suspended_volume_zero: '停牌顺延(volume=0兜底)',
@@ -265,6 +274,8 @@ export interface WinRateRecord {
   holdDays: { min: number; max: number } | null;
   /** T+1 可卖日期（A 股 T+1，首个可卖出交易日）；拿不到为 null */
   tPlus1SellDate: string | null;
+  /** 买入时机：t_close=记录日收盘买入；t_next_open=记录日次日开盘买入（默认）；缺省按 t_next_open 处理 */
+  buyTiming?: BuyTiming;
   /** 战法参数快照版本（对应 winrate-config 的 paramVersion） */
   paramVersion: string;
   /** 结算规则版本（v2-t1-fix 起）：标记该记录按哪版卖出判定口径生成 */
@@ -374,6 +385,8 @@ export interface WinRateSnapshotHit {
     stop: number | null;
     target1: number | null;
     target2: number | null;
+    /** 买入时机（收盘买入 / 次日开盘买入）；后端未下发时前端按策略配置回填 */
+    buyTiming?: BuyTiming;
   };
 }
 

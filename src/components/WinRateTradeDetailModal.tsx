@@ -316,6 +316,16 @@ export function WinRateTradeDetailModal({
               </div>
             </div>
 
+            {/* 持仓中提示：已买入但尚未平仓，等待 T+1 可卖日触发卖出条件 */}
+            {record.trade.status === 'open' && (
+              <div className="wr-open-banner">
+                持仓中，等待触发卖出条件
+                {record.tPlus1SellDate
+                  ? `（T+1 可卖日：${record.tPlus1SellDate}）`
+                  : '（T+1 可卖日待数据补齐）'}
+              </div>
+            )}
+
             {/* 记录日买卖计划（记录时生成，计划价；区别于上方实际成交的买入价/卖出价） */}
             <div className="plan-box wr-plan-snapshot">
               <div className="plan-head">记录日买卖计划（计划价）</div>

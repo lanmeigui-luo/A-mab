@@ -98,6 +98,7 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                   战法{sortMark('strategyName')}
                 </th>
                 <th>股票</th>
+                <th>买入日期</th>
                 <th className="num">买入价</th>
                 <th className="num">卖出价</th>
                 <th className="num">触发价</th>
@@ -129,6 +130,7 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                       <span className="wr-stock">{r.name}</span>
                       <span className="wr-code">{r.code}</span>
                     </td>
+                    <td className="mono">{r.trade.buyDate ?? '—'}</td>
                     <td className="num mono">
                       {r.trade.buyPrice == null ? '—' : r.trade.buyPrice.toFixed(2)}
                     </td>

@@ -34,6 +34,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { marketApi } from '../services/market';
 import type { ScreenHit, StrategyHit } from '../domain/strategy';
 import type { KlineRow } from '../domain/types';
+import type { BuyTiming } from '../domain/winrate';
 import {
   listEnabledStrategies,
   getWinRateConfig,
@@ -380,14 +381,19 @@ export function useWinRateRecorder() {
           let tPlus1: string | null = null;
           const anomalies: WinRateAnomaly[] = [];
           if (!unbuyable) {
-            // T+1 可卖日预估（best-effort）：记录时买入日 K 通常尚未产生（买入日为记录日次日），
-            // 算不出属正常现象，绝不在记录时盖 data_missing（data_missing 只由结算逻辑在买入日真正缺失时判定）。
+            // T+1 可卖日预估（best-effort）：记录时买入日 K 通常尚未产生，算不出属正常现象，
+            // 绝不在记录时盖 data_missing（data_missing 只由结算逻辑在买入日真正缺失时判定）。
+            // 买入时机分支：t_close 买入日=记录日（取同日期索引）；t_next_open 买入日=次日（取其后首交易日）。
             try {
               const k = await marketApi.kline(hit.fullCode, 'day', 'qfq', KLINE_COUNT);
               const daily = k.rows ?? [];
-              const idx = firstIndexAfter(daily, date);
+              const bt: BuyTiming = cfg.buyTiming ?? 't_next_open';
+              const idx =
+                bt === 't_close'
+                  ? daily.findIndex((r) => r.date === date)
+                  : firstIndexAfter(daily, date);
               if (idx >= 0 && idx + 1 < daily.length) tPlus1 = daily[idx + 1].date;
-              // 否则 tPlus1 保持 null，结算时由 simulateTrade 用完整 K 线重算（记录日买入日未到，不标异常）
+              // 否则 tPlus1 保持 null，结算时由 simulateTrade 用完整 K 线重算（买入日未到，不标异常）
             } catch {
               /* tPlus1 保持 null，结算时由 simulateTrade 内部重算 */
             }
@@ -426,6 +432,7 @@ export function useWinRateRecorder() {
             holdDays: cfg.holdDays,
             tPlus1SellDate: tPlus1,
             paramVersion: STRATEGY_PARAM_VERSION,
+            buyTiming: cfg.buyTiming,
             backfilled: isBackfill,
             // 触发时机口径：短期方案一律为盘中尾盘快照
             recordedAt,
