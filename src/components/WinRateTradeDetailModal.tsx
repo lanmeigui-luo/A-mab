@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { WinRateRecord } from '@/domain/winrate';
 import {
-  TRADE_STATUS_LABELS,
+  TRADE_VIEW_STATUS_LABELS,
   SELL_REASON_LABELS,
   tradeTriggerPrice,
   tradeRuleNote,
+  tradeViewCategory,
 } from '@/domain/winrate';
 import { marketApi } from '@/services/market';
 import type { KlineResponse, KlineRow } from '@/domain/types';
@@ -237,6 +238,7 @@ export function WinRateTradeDetailModal({
   const ret = record.trade.returnPct;
   const tp = tradeTriggerPrice(record);
   const ruleNote = tradeRuleNote(record);
+  const category = tradeViewCategory(record);
   const cfg = getWinRateConfig(record.strategyId);
   const factors = record.scoreFactors ?? [];
   const maxScore = factors.reduce((m, f) => (f.score == null ? m : Math.max(m, f.score)), 0) || 1;
@@ -283,8 +285,8 @@ export function WinRateTradeDetailModal({
               </div>
               <div>
                 <span>状态</span>
-                <span className={`wr-status wr-status-${record.trade.status}`}>
-                  {TRADE_STATUS_LABELS[record.trade.status]}
+                <span className={`wr-status wr-status-${category}`}>
+                  {TRADE_VIEW_STATUS_LABELS[category]}
                 </span>
               </div>
               <div>
@@ -316,13 +318,16 @@ export function WinRateTradeDetailModal({
               </div>
             </div>
 
-            {/* 持仓中提示：已买入但尚未平仓，等待 T+1 可卖日触发卖出条件 */}
+            {/* open 细分：未买入 → 等待买入动作；已买入 → 等待触发卖出条件 */}
             {record.trade.status === 'open' && (
               <div className="wr-open-banner">
-                持仓中，等待触发卖出条件
-                {record.tPlus1SellDate
-                  ? `（T+1 可卖日：${record.tPlus1SellDate}）`
-                  : '（T+1 可卖日待数据补齐）'}
+                {category === 'recorded'
+                  ? `已记录，等待${record.buyTiming === 't_close' ? '记录日尾盘' : '次日开盘'}买入`
+                  : `持仓中，等待触发卖出条件${
+                      record.tPlus1SellDate
+                        ? `（T+1 可卖日：${record.tPlus1SellDate}）`
+                        : '（T+1 可卖日待数据补齐）'
+                    }`}
               </div>
             )}
 

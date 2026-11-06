@@ -167,12 +167,38 @@ export function tradeRuleNote(record: WinRateRecord): string {
   return s;
 }
 
-/** 交易状态中文文案（UI 唯一出处） */
+/** 交易状态中文文案（数据层 status 的 UI 唯一出处） */
 export const TRADE_STATUS_LABELS: Record<TradeStatus, string> = {
   open: '持仓中',
   closed: '已平仓',
   invalid: '未成交',
   anomaly: '异常',
+};
+
+/**
+ * 交易明细视图分类：在数据层 status 之上细分出「已记录/待买入」。
+ * 仅用于展示层筛选与文案，**不写入 store、不改变 TradeStatus、不参与统计**。
+ */
+export type TradeViewCategory = TradeStatus | 'recorded';
+
+/**
+ * 交易明细 Tab 分类（UI 唯一判定口径，纯函数便于离线验收）。
+ *  - open 且 buyPrice == null：记录已生成、买入动作尚未发生 → 'recorded'（已记录/待买入）
+ *  - open 且 buyPrice != null：已成功买入、尚未卖出 → 'open'（持仓中）
+ *  - 其余 closed / invalid / anomaly 原样返回；高开/封板等未成交保持归「未成交」
+ *
+ * 只划分 open 集合且互斥完备：recorded ∪ open 恰等于原 open 集合，不重不漏。
+ * 统计层（winrate-stats 的 eligible）只取 closed，故本分类不影响胜率分母。
+ */
+export function tradeViewCategory(record: WinRateRecord): TradeViewCategory {
+  if (record.trade.status === 'open' && record.trade.buyPrice == null) return 'recorded';
+  return record.trade.status;
+}
+
+/** 明细表状态列文案（含视图分类 recorded）；Tab 标题用「已记录」，行内标签用「待买入」 */
+export const TRADE_VIEW_STATUS_LABELS: Record<TradeViewCategory, string> = {
+  ...TRADE_STATUS_LABELS,
+  recorded: '待买入',
 };
 
 /** 信号强度来源（v1 取 StrategyHit.hitRatio，预留枚举便于后续切换） */

@@ -1448,6 +1448,8 @@ button.idx-card:hover {
   white-space: nowrap;
 }
 .wr-status-open { background: #eef2ff; color: var(--accent); }
+/* 已记录/待买入：与「持仓中」区分，提示买入动作尚未发生 */
+.wr-status-recorded { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
 
 .wr-open-banner {
   margin: 10px 0 4px;

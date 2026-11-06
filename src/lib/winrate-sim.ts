@@ -160,6 +160,38 @@ function indexOfDate(klines: KlineRow[], date: string): number {
   return -1;
 }
 
+/**
+ * 定位买入日在 K 线中的索引 —— 引擎与结算侧【唯一口径】。
+ *  t_close：买入日 = 记录日当天（精确日期匹配）
+ *  t_next_open（默认）：买入日 = 记录日后首个交易日
+ * 返回 -1 = 买入日 K 尚未产生（t_close 时也可能记录日不在 K 线中）。
+ * 抽成共享函数是为避免结算侧曾无条件用 firstIndexAfter、与 t_close 口径错位。
+ */
+export function locateBuyDayIndex(record: WinRateRecord, dailyK: KlineRow[]): number {
+  const buyTiming: BuyTiming = record.buyTiming ?? 't_next_open';
+  return buyTiming === 't_close'
+    ? indexOfDate(dailyK, record.date)
+    : firstIndexAfter(dailyK, record.date);
+}
+
+/**
+ * 结算推进判定（recorder 守卫，纯函数便于离线验收）。
+ *  - 买入日 K 未产生 → false，保持「已记录/待买入」。
+ *  - t_close：买入日 = 记录日，记录窗口（14:50-15:00）内该 K 可能仍是盘中快照，
+ *    需等记录日之后出现新 K 才视为收盘定稿，避免用盘中价冒充收盘价。
+ *  - t_next_open：买入日 K 一旦存在即为完整收盘日 K，**即使其后的 T+1 卖出日 K 未产生也允许结算**。
+ *    simulateTrade 在 tPlus1SellDate == null 时会返回 open 并保留 buyPrice（不标 data_missing），
+ *    因此买入日收盘即可落盘买入价，记录当天即可从「待买入」迁移到「持仓中」。
+ */
+export function canSettleRecord(record: WinRateRecord, dailyK: KlineRow[]): boolean {
+  if (!dailyK || dailyK.length === 0) return false;
+  const buyTiming: BuyTiming = record.buyTiming ?? 't_next_open';
+  const buyIdx = locateBuyDayIndex(record, dailyK);
+  if (buyIdx < 0) return false;
+  if (buyTiming === 't_close' && buyIdx + 1 >= dailyK.length) return false;
+  return true;
+}
+
 /** 深拷贝入参 trade（保证不修改原对象） */
 function cloneTrade(t: TradeRecord): TradeRecord {
   return {
@@ -221,12 +253,9 @@ export function simulateTrade(
   const isST = options.isST ?? isSTFromName(record.name);
   const code = record.code;
 
-  // ── 定位买入日（按买入时机 buyTiming 分支）────────────────────────────
+  // ── 定位买入日（与结算侧共用 locateBuyDayIndex，口径唯一）──────────────
   const buyTiming: BuyTiming = record.buyTiming ?? 't_next_open';
-  const buyIdx =
-    buyTiming === 't_close'
-      ? indexOfDate(dailyK, record.date) // 记录日当天收盘买入：买入日 = 记录日本身
-      : firstIndexAfter(dailyK, record.date); // 次日开盘买入：买入日 = 记录日下一交易日
+  const buyIdx = locateBuyDayIndex(record, dailyK);
   if (buyIdx < 0) {
     // 无法定位买入日：t_close 时记录日不在 K 线中；t_next_open 时记录日后无交易日
     trade.status = 'anomaly';

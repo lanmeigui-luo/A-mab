@@ -43,7 +43,7 @@ import {
   DEFAULT_RECORD_CUTOFF,
   type StrategyWinRateConfig,
 } from '../domain/winrate-config';
-import { simulateTrade, type SimSuspensionRange } from '../lib/winrate-sim';
+import { simulateTrade, canSettleRecord, type SimSuspensionRange } from '../lib/winrate-sim';
 import {
   findAmbiguousCandidateDay,
   resolveAmbiguities,
@@ -307,7 +307,7 @@ export interface RecordStrategyResult {
 
 export interface SettleResult {
   settled: number;
-  /** 买入日尚未发生（记录在当日、T+1 买入日 K 未产生）→ 跳过，留待后续结算 */
+  /** 买入日 K 未产生，或 t_close 记录日 K 尚未收盘定稿 → 跳过，保持「已记录/待买入」，留待后续结算 */
   skippedNoBuyDay: number;
   errors: number;
 }
@@ -464,7 +464,10 @@ export function useWinRateRecorder() {
     [appendRecords],
   );
 
-  /** 结算所有 status=open 记录：调 kline + simulateTrade，结果写回 store（已平仓不可改）。结算不受窗口限制。 */
+  /**
+   * 结算所有 status=open 记录（含「已记录/待买入」）：调 kline + simulateTrade，结果写回 store（已平仓不可改）。
+   * 结算不受窗口限制；是否推进由 canSettleRecord 判定，买入日收盘即落盘 buyPrice。
+   */
   const settleOpenRecords = useCallback(async (): Promise<SettleResult> => {
     const result: SettleResult = { settled: 0, skippedNoBuyDay: 0, errors: 0 };
     // 读最新内存 state（而非 recordsRef.current）：保证同一次周期内刚 append 的补拉/记录记录也能被结算
@@ -480,23 +483,14 @@ export function useWinRateRecorder() {
           result.errors++;
           continue;
         }
-        // Bug2 修复：买入日尚未发生（最后一根 K 线日期 <= 记录日，即 T+1 买入日 K 未产生）→
-        // 跳过，保持 status='open'，绝不允许标 data_missing。data_missing 仅在「买入日本应发生但 K 线中
-        // 彻底找不到对应数据」时、由 simulateTrade 判定。
-        const lastKlineDate = daily[daily.length - 1].date;
-        if (lastKlineDate <= rec.date) {
-          result.skippedNoBuyDay++;
-          continue;
-        }
-        // 买入日已发生：定位买入日索引（lastKlineDate>rec.date 已保证 buyIdx>=0，此分支仅防御）
-        const buyIdx = firstIndexAfter(daily, rec.date);
-        if (buyIdx < 0) {
-          result.skippedNoBuyDay++;
-          continue;
-        }
-        // T+1 卖出日尚未发生（买入日已是最后一根 K 线，次交易日 K 未产生）→ 跳过保持 open，
-        // 避免 simulateTrade 因 tPlus1SellDate 为 null 误标 data_missing（买入日当天结算会命中此分支）。
-        if (buyIdx + 1 >= daily.length) {
+        // 结算推进判定（与 simulateTrade 共用 locateBuyDayIndex / canSettleRecord，纯函数可离线验收）：
+        //  - 买入日 K 未产生 → 跳过，保持「已记录/待买入」，绝不标 data_missing；
+        //  - t_close 买入日=记录日：记录窗口内该 K 可能是盘中快照，等记录日后出现新 K 才算收盘定稿；
+        //  - t_next_open：买入日 K 一旦存在即为完整收盘日 K，即使其后的 T+1 卖出日 K 未产生也放行，
+        //    交由 simulateTrade 的 tPlus1SellDate==null 分支落盘 buyPrice（返回 open，不标 data_missing）。
+        //    这样「买入日（T+1）收盘即落盘」，记录当天即从「待买入」迁移到「持仓中」。
+        //    旧实现在此处按 buyIdx+1>=length 跳过，会把买入价落盘推迟到 T+2。
+        if (!canSettleRecord(rec, daily)) {
           result.skippedNoBuyDay++;
           continue;
         }

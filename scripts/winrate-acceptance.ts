@@ -10,9 +10,14 @@
  *  - 歧义排除率统计断言
  *  - tradeTriggerPrice / tradeRuleNote 辅助函数
  */
-import { simulateTrade } from '../src/lib/winrate-sim';
+import { simulateTrade, locateBuyDayIndex, canSettleRecord } from '../src/lib/winrate-sim';
 import { computeWinRateStats } from '../src/lib/winrate-stats';
-import { tradeTriggerPrice, tradeRuleNote } from '../src/domain/winrate';
+import {
+  tradeTriggerPrice,
+  tradeRuleNote,
+  tradeViewCategory,
+  TRADE_VIEW_STATUS_LABELS,
+} from '../src/domain/winrate';
 import { TRADE_RULE_VERSION } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason } from '../src/domain/winrate';
 import type { KlineRow } from '../src/domain/types';
@@ -906,6 +911,158 @@ function runBuyTimingAssertion() {
   }
 }
 
+// ───────── 「已记录」Tab 视图分类验收（G1-G5） ─────────
+function runRecordedCategoryAssertion() {
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 11, target2: 12 };
+
+  section('已记录Tab G1：记录刚生成（open + buyPrice=null）→ recorded，不落入「持仓中」');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    const c = tradeViewCategory(rec);
+    check(c === 'recorded', `category=recorded (实际: ${c})`);
+    check(c !== 'open', '不在「持仓中」Tab');
+    check(TRADE_VIEW_STATUS_LABELS[c] === '待买入', `行内标签=待买入 (实际: ${TRADE_VIEW_STATUS_LABELS[c]})`);
+    check(rec.trade.status === 'open', '数据层 status 仍为 open（视图分类不落盘、不改 store）');
+  }
+
+  section('已记录Tab G2：次日买入成功（open + buyPrice 已落盘）→ open，自动迁移到「持仓中」');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan }); // 默认 t_next_open
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10.0, 10.3, 9.9, 10.1),
+      k('2026-01-02', 10.2, 10.4, 10.0, 10.3), // 买入日：开盘 10.2 ∈ [10,10.5]，其后无 T+1 卖出日
+    ];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'open', `买入后 status=open (实际: ${trade.status})`);
+    check(trade.buyPrice === 10.2, `buyPrice 已落盘 10.2 (实际: ${trade.buyPrice})`);
+    const settled = { ...rec, trade: { ...trade } };
+    const c = tradeViewCategory(settled);
+    check(c === 'open', `category=open（持仓中）(实际: ${c})`);
+    check(TRADE_VIEW_STATUS_LABELS[c] === '持仓中', '行内标签=持仓中');
+  }
+
+  section('已记录Tab G3：高开/封板未成交（invalid + buyPrice=null）→ invalid，保持「未成交」');
+  {
+    // 次日高开：买入日开盘 10.8 > buyHigh 10.5 且 < target1 11 → high_open_unfilled
+    const highOpen = makeRec({ date: '2026-01-01', ...plan });
+    const d1 = [
+      ...HIST,
+      k('2026-01-01', 10.0, 10.3, 9.9, 10.1),
+      k('2026-01-02', 10.8, 10.9, 10.7, 10.85),
+      k('2026-01-03', 10.8, 10.9, 10.7, 10.85),
+    ];
+    const t1 = simulateTrade(highOpen, d1).trade;
+    check(t1.status === 'invalid', `高开 status=invalid (实际: ${t1.status})`);
+    check(tradeViewCategory({ ...highOpen, trade: t1 }) === 'invalid', '高开→未成交 Tab（非已记录）');
+
+    // 尾盘封板：t_close 收盘=最高且涨幅 10% → limit_up_filled_close，排除分母
+    const sealed = makeRec({ date: '2026-01-01', ...plan });
+    sealed.buyTiming = 't_close';
+    const d2 = [...HIST, k('2026-01-01', 10.5, 11.0, 10.4, 11.0)];
+    const t2 = simulateTrade(sealed, d2).trade;
+    check(t2.status === 'invalid', `封板 status=invalid (实际: ${t2.status})`);
+    check(t2.anomalies.includes('limit_up_filled_close'), `封板异常正确 (实际: ${t2.anomalies})`);
+    check(tradeViewCategory({ ...sealed, trade: t2 }) === 'invalid', '封板→未成交 Tab（非已记录）');
+  }
+
+  section('已记录Tab G4：t_close 收盘价待定 → recorded；已平仓 → closed');
+  {
+    const pending = makeRec({ date: '2026-01-01', ...plan });
+    pending.buyTiming = 't_close';
+    check(tradeViewCategory(pending) === 'recorded', 't_close 待定记录归入「已记录」');
+    const closedRec = makeRec({ date: '2026-01-01', ...plan });
+    closedRec.trade = { ...closedRec.trade, status: 'closed', buyPrice: 10.2, sellPrice: 11, returnPct: 7.84 };
+    check(tradeViewCategory(closedRec) === 'closed', '已平仓仍归「已平仓」');
+  }
+
+  section('已记录Tab G5：互斥完备性 + 统计分母不受视图分类影响');
+  {
+    const a = makeRec({ date: '2026-01-01', ...plan }); // recorded
+    const b = makeRec({ date: '2026-01-02', ...plan });
+    b.trade = { ...b.trade, buyPrice: 10.2 }; // open（已买入）
+    const c = makeRec({ date: '2026-01-03', ...plan });
+    c.trade = { ...c.trade, status: 'invalid' }; // invalid 且 buyPrice=null
+    const d = makeRec({ date: '2026-01-04', ...plan });
+    d.trade = { ...d.trade, status: 'closed', buyPrice: 10, sellPrice: 11, returnPct: 10 };
+    const all = [a, b, c, d];
+    const openAll = all.filter((r) => r.trade.status === 'open');
+    const recorded = all.filter((r) => tradeViewCategory(r) === 'recorded');
+    const holding = all.filter((r) => tradeViewCategory(r) === 'open');
+    check(
+      recorded.length + holding.length === openAll.length,
+      `recorded+持仓中 = 原 open 集合 (${recorded.length}+${holding.length}=${openAll.length})`,
+    );
+    check(recorded.every((r) => !holding.includes(r)), '两类无重叠');
+    check(c.trade.buyPrice == null && tradeViewCategory(c) === 'invalid', 'invalid 即使 buyPrice=null 也不误归 recorded');
+    const s = computeWinRateStats(all, { excludeAnomaly: true }).byStrategy[0];
+    check(s.closed === 1, `统计有效笔数=1（仅 closed，视图分类不碰分母）(实际: ${s.closed})`);
+  }
+}
+
+// ───────── 结算守卫：买入日（T+1）收盘即落盘（H1-H5） ─────────
+function runSettleGuardAssertion() {
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 11, target2: 12 };
+  const recDay = k('2026-01-01', 10.0, 10.3, 9.9, 10.1);
+  const buyDay = k('2026-01-02', 10.2, 10.4, 10.0, 10.3); // t_next_open 的买入日
+
+  section('结算守卫 H1：t_next_open 买入日 K 未产生 → 不结算，保持「待买入」');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    const daily = [...HIST, recDay];
+    check(locateBuyDayIndex(rec, daily) === -1, `买入日索引=-1 (实际: ${locateBuyDayIndex(rec, daily)})`);
+    check(canSettleRecord(rec, daily) === false, 'canSettleRecord=false');
+    check(tradeViewCategory(rec) === 'recorded', '仍在「已记录」Tab');
+  }
+
+  section('结算守卫 H2：t_next_open 买入日收盘、卖出日 K 未产生 → 放行结算');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    const daily = [...HIST, recDay, buyDay];
+    check(
+      locateBuyDayIndex(rec, daily) === HIST.length + 1,
+      `买入日索引=记录日后首根 (实际: ${locateBuyDayIndex(rec, daily)})`,
+    );
+    check(canSettleRecord(rec, daily) === true, 'canSettleRecord=true（旧守卫在此会跳过，推迟到 T+2）');
+  }
+
+  section('结算守卫 H3：H2 场景 simulateTrade 立即落盘 buyPrice（open，不标 data_missing）');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    const daily = [...HIST, recDay, buyDay];
+    const { trade, tPlus1SellDate } = simulateTrade(rec, daily);
+    check(trade.status === 'open', `status=open（持仓中）(实际: ${trade.status})`);
+    check(trade.buyDate === '2026-01-02', `买入日=2026-01-02 (实际: ${trade.buyDate})`);
+    check(trade.buyPrice === 10.2, `buyPrice=10.2 已落盘 (实际: ${trade.buyPrice})`);
+    check(!trade.anomalies.includes('data_missing'), `不误标 data_missing (实际: ${trade.anomalies})`);
+    check(tPlus1SellDate == null, 'T+1 卖出日尚未产生（null）');
+    check(tradeViewCategory({ ...rec, trade }) === 'open', '买入日当天即从「待买入」迁移到「持仓中」');
+  }
+
+  section('结算守卫 H4：t_close 盘中快照保护（记录日 K 未收盘定稿 → 不结算）');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_close';
+    const onlyRecordDay = [...HIST, recDay];
+    check(
+      locateBuyDayIndex(rec, onlyRecordDay) === HIST.length,
+      `买入日=记录日索引 (实际: ${locateBuyDayIndex(rec, onlyRecordDay)})`,
+    );
+    check(canSettleRecord(rec, onlyRecordDay) === false, '仅到记录日 → false（避免盘中价冒充收盘价）');
+    check(canSettleRecord(rec, [...HIST, recDay, buyDay]) === true, '记录日后出现新 K → true（收盘定稿）');
+  }
+
+  section('结算守卫 H5：买入日定位口径（t_close=记录日 / t_next_open=次日）');
+  {
+    const daily = [...HIST, recDay, buyDay];
+    const a = makeRec({ date: '2026-01-01', ...plan });
+    a.buyTiming = 't_close';
+    const b = makeRec({ date: '2026-01-01', ...plan });
+    check(locateBuyDayIndex(a, daily) === HIST.length, `t_close→记录日 (实际: ${locateBuyDayIndex(a, daily)})`);
+    check(locateBuyDayIndex(b, daily) === HIST.length + 1, `t_next_open→次日 (实际: ${locateBuyDayIndex(b, daily)})`);
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -914,6 +1071,8 @@ async function main() {
   runStatsAssertion();
   runHelperAssertion();
   runBuyTimingAssertion();
+  runRecordedCategoryAssertion();
+  runSettleGuardAssertion();
   await runMinuteAssertions();
   runMinuteStatsAssertion();
 

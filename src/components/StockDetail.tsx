@@ -9,7 +9,7 @@ import { DASH, fmtAmount, fmtNum, fmtVolume } from '@/lib/format';
 import { calcMA, rangeStats } from '@/lib/indicators';
 import { useWinRateStore } from '@/hooks/useWinRateStore';
 import { computeWinRateStats, filterWinRateRecords } from '@/lib/winrate-stats';
-import { TRADE_STATUS_LABELS } from '@/domain/winrate';
+import { TRADE_VIEW_STATUS_LABELS, tradeViewCategory } from '@/domain/winrate';
 
 interface Props {
   fullCode: string;
@@ -496,7 +496,7 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
                   最近一次：{stockLatest.strategyName} · {stockLatest.date} ·{' '}
                   {stockLatest.trade.status === 'closed' && stockLatest.trade.returnPct != null
                     ? `${stockLatest.trade.returnPct > 0 ? '+' : ''}${stockLatest.trade.returnPct}%`
-                    : (TRADE_STATUS_LABELS[stockLatest.trade.status] ?? stockLatest.trade.status)}
+                    : TRADE_VIEW_STATUS_LABELS[tradeViewCategory(stockLatest)]}
                 </div>
               )}
             </>

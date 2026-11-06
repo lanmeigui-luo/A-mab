@@ -1,15 +1,18 @@
 import { useMemo, useState } from 'react';
-import type { WinRateRecord, TradeStatus } from '../domain/winrate';
+import type { WinRateRecord } from '../domain/winrate';
 import {
   SELL_REASON_LABELS,
-  TRADE_STATUS_LABELS,
+  TRADE_VIEW_STATUS_LABELS,
   ANOMALY_LABELS,
   tradeTriggerPrice,
   tradeRuleNote,
+  tradeViewCategory,
+  type TradeViewCategory,
 } from '../domain/winrate';
 
 type SortKey = 'date' | 'strategyName' | 'returnPct';
-type StatusFilter = 'all' | TradeStatus;
+/** 'recorded' 为展示层分类（已记录/待买入），不是数据层 TradeStatus */
+type StatusFilter = 'all' | TradeViewCategory;
 
 interface Props {
   /** 已按页面筛选（战法/时间/来源/持有周期）过滤后的记录 */
@@ -20,6 +23,7 @@ interface Props {
 
 const STATUS_FILTERS: { v: StatusFilter; l: string }[] = [
   { v: 'all', l: '全部' },
+  { v: 'recorded', l: '已记录' },
   { v: 'open', l: '持仓中' },
   { v: 'closed', l: '已平仓' },
   { v: 'invalid', l: '未成交' },
@@ -33,7 +37,8 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
 
   const rows = useMemo(() => {
     let r = records;
-    if (statusFilter !== 'all') r = r.filter((x) => x.trade.status === statusFilter);
+    // 按视图分类筛选：open 且 buyPrice==null 归「已记录」，「持仓中」严格为已买入未卖出
+    if (statusFilter !== 'all') r = r.filter((x) => tradeViewCategory(x) === statusFilter);
     const arr = [...r];
     arr.sort((a, b) => {
       let av: number | string;
@@ -116,6 +121,7 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
             <tbody>
               {rows.map((r) => {
                 const ret = r.trade.returnPct;
+                const category = tradeViewCategory(r);
                 const anomalies = r.trade.anomalies.map((a) => ANOMALY_LABELS[a]).join('、');
                 return (
                   <tr
@@ -152,10 +158,16 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                       {ret == null ? '—' : `${ret.toFixed(2)}%`}
                     </td>
                     <td>{SELL_REASON_LABELS[r.trade.sellReason]}</td>
-                    <td className="wr-rule-note">{tradeRuleNote(r)}</td>
+                    <td className="wr-rule-note">
+                      {category === 'recorded'
+                        ? r.buyTiming === 't_close'
+                          ? '记录日尾盘买入（收盘价待定）'
+                          : '次日开盘买入'
+                        : tradeRuleNote(r)}
+                    </td>
                     <td>
-                      <span className={`wr-status wr-status-${r.trade.status}`}>
-                        {TRADE_STATUS_LABELS[r.trade.status]}
+                      <span className={`wr-status wr-status-${category}`}>
+                        {TRADE_VIEW_STATUS_LABELS[category]}
                       </span>
                     </td>
                     <td className="wr-anom">{anomalies || '—'}</td>
