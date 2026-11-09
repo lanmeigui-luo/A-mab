@@ -254,6 +254,13 @@ export interface TradeRecord {
   ruleVersion?: string;
   /** 失效 / 排除原因说明（如旧规则记录标「目标价成交口径错误」） */
   invalidReason?: string;
+  /**
+   * 未成交判定日 YYYY-MM-DD（status==='invalid' 时由 simulateTrade 落盘）。
+   * 取判定所用那根日 K 的 date：t_next_open=次日开盘高开/一字板日，t_close=记录日收盘封板/价格超区间日。
+   * 可选字段：老数据（含记录生成阶段因无行情直接判 invalid 的记录）没有该字段，展示层须回退记录日 r.date。
+   * 注意该日期历史上也存在 buyDate 里，但 buyDate 是「买入日期」语义，勿混用。
+   */
+  invalidDate?: string | null;
   /** 是否从胜率分母中排除（日K歧义等）：true=不计入胜率/盈亏比，但仍可在明细表查看 */
   excludedFromStats?: boolean;
   /** 分钟线歧义消解元数据（ambiguous_intraday / ambiguous_1min 待二次判定时填充；详见 MinuteResolveMeta） */

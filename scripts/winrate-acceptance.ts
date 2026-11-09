@@ -1158,6 +1158,76 @@ function runExecutionRateAssertion() {
   }
 }
 
+// ───────── 未成交判定日 invalidDate（本轮新增 K1-K6） ─────────
+function runInvalidDateAssertion() {
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 12, target2: 13, holdMax: 1 };
+  const recDay = k('2026-01-01', 10.0, 10.2, 9.9, 10.0);
+  const highOpenDay = [...HIST, recDay, k('2026-01-02', 10.8, 10.9, 10.7, 10.85), k('2026-01-03', 10.8, 10.9, 10.7, 10.85)];
+  const fillableDay = [...HIST, recDay, k('2026-01-02', 10.2, 10.4, 10.0, 10.3), k('2026-01-03', 10.3, 10.5, 10.2, 10.4)];
+
+  section('判定日 K1：t_next_open 次日高开未成交 → invalidDate=判定当天');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    const { trade } = simulateTrade(rec, highOpenDay);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('high_open_unfilled'), `anomaly 正确 (实际: ${trade.anomalies})`);
+    check(trade.invalidDate === '2026-01-02', `invalidDate=次日 2026-01-02 (实际: ${trade.invalidDate})`);
+    check(trade.buyDate === '2026-01-02', 'buyDate 仍为计划买入日（原有语义不变）');
+  }
+
+  section('判定日 K2：t_next_open 次日一字板 → invalidDate=判定当天');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    const daily = [...HIST, recDay, k('2026-01-02', 11.0, 11.0, 11.0, 11.0)];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('limit_up_unfilled'), `anomaly 正确 (实际: ${trade.anomalies})`);
+    check(trade.invalidDate === '2026-01-02', `invalidDate=2026-01-02 (实际: ${trade.invalidDate})`);
+  }
+
+  section('判定日 K3：t_close 记录日封板拦截 → invalidDate=记录日');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_close';
+    const daily = [...HIST, k('2026-01-01', 10.5, 11.0, 10.4, 11.0)];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('limit_up_filled_close'), `anomaly 正确 (实际: ${trade.anomalies})`);
+    check(trade.invalidDate === '2026-01-01', `invalidDate=记录日 2026-01-01 (实际: ${trade.invalidDate})`);
+  }
+
+  section('判定日 K4：t_close 收盘价超买入区间 → invalidDate=记录日');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    rec.buyTiming = 't_close';
+    const daily = [...HIST, k('2026-01-01', 10.6, 11.2, 10.5, 11.1)];
+    const { trade } = simulateTrade(rec, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('high_close_unfilled'), `anomaly 正确 (实际: ${trade.anomalies})`);
+    check(trade.invalidDate === '2026-01-01', `invalidDate=记录日 2026-01-01 (实际: ${trade.invalidDate})`);
+  }
+
+  section('判定日 K5：老数据无 invalidDate 也能正常结算，成交记录不残留');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    check(rec.trade.invalidDate === undefined, '老数据 trade 无 invalidDate 字段');
+    const { trade } = simulateTrade(rec, fillableDay);
+    check(trade.status !== 'invalid', `老数据正常成交 (实际: ${trade.status})`);
+    check(trade.invalidDate == null, `成交记录 invalidDate 为空 (实际: ${trade.invalidDate})`);
+  }
+
+  section('判定日 K6：从 invalid 重算成成交后不残留旧判定日');
+  {
+    const rec = makeRec({ date: '2026-01-01', ...plan });
+    const t1 = simulateTrade(rec, highOpenDay).trade;
+    check(t1.invalidDate === '2026-01-02', `首次判定 invalidDate=2026-01-02 (实际: ${t1.invalidDate})`);
+    const rec2 = { ...rec, trade: { ...t1 } };
+    const t2 = simulateTrade(rec2, fillableDay).trade;
+    check(t2.status !== 'invalid', `重算后成交 (实际: ${t2.status})`);
+    check(t2.invalidDate == null, `旧判定日已清空 (实际: ${t2.invalidDate})`);
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1169,6 +1239,7 @@ async function main() {
   runRecordedCategoryAssertion();
   runSettleGuardAssertion();
   runExecutionRateAssertion();
+  runInvalidDateAssertion();
   await runMinuteAssertions();
   runMinuteStatsAssertion();
 

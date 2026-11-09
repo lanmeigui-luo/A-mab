@@ -197,6 +197,7 @@ function cloneTrade(t: TradeRecord): TradeRecord {
   return {
     buyDate: t.buyDate,
     buyPrice: t.buyPrice,
+    invalidDate: t.invalidDate ?? null,
     sellDate: t.sellDate,
     sellPrice: t.sellPrice,
     holdDays: t.holdDays,
@@ -233,6 +234,7 @@ export function simulateTrade(
   Object.assign(trade, {
     buyDate: null,
     buyPrice: null,
+    invalidDate: null, // 重算时先清空，避免从 invalid 重算成成交/平仓后残留旧判定日
     sellDate: null,
     sellPrice: null,
     holdDays: null,
@@ -287,6 +289,7 @@ export function simulateTrade(
       if (sealedLimitUp) {
         trade.status = 'invalid';
         trade.buyDate = buyDate;
+        trade.invalidDate = buyDate;
         trade.buyPrice = null;
         trade.sellReason = 'unknown';
         trade.anomalies = ['limit_up_filled_close'];
@@ -299,6 +302,7 @@ export function simulateTrade(
     if (record.buyLow != null && close < record.buyLow) {
       trade.status = 'invalid';
       trade.buyDate = buyDate;
+      trade.invalidDate = buyDate;
       trade.buyPrice = null;
       trade.sellReason = 'unknown';
       trade.anomalies = ['low_close_unfilled'];
@@ -307,6 +311,7 @@ export function simulateTrade(
     if (record.buyHigh != null && close > record.buyHigh) {
       trade.status = 'invalid';
       trade.buyDate = buyDate;
+      trade.invalidDate = buyDate;
       trade.buyPrice = null;
       trade.sellReason = 'unknown';
       trade.anomalies = ['high_close_unfilled'];
@@ -342,6 +347,7 @@ export function simulateTrade(
           // 一字板未成交（优先于普通高开）
           trade.status = 'invalid';
           trade.buyDate = buyDate;
+          trade.invalidDate = buyDate;
           trade.buyPrice = null;
           trade.sellReason = 'unknown';
           trade.anomalies = ['limit_up_unfilled'];
@@ -350,6 +356,7 @@ export function simulateTrade(
         if (overTarget1) {
           trade.status = 'invalid';
           trade.buyDate = buyDate;
+          trade.invalidDate = buyDate;
           trade.buyPrice = null;
           trade.sellReason = 'unknown';
           trade.anomalies = ['high_open_over_target1'];
@@ -359,6 +366,7 @@ export function simulateTrade(
         if (record.buyHigh != null && buyDayK.open > record.buyHigh) {
           trade.status = 'invalid';
           trade.buyDate = buyDate;
+          trade.invalidDate = buyDate;
           trade.buyPrice = null;
           trade.sellReason = 'unknown';
           trade.anomalies = ['high_open_unfilled'];
@@ -369,6 +377,7 @@ export function simulateTrade(
       if (overTarget1) {
         trade.status = 'invalid';
         trade.buyDate = buyDate;
+        trade.invalidDate = buyDate;
         trade.buyPrice = null;
         trade.sellReason = 'unknown';
         trade.anomalies = ['high_open_over_target1'];
@@ -378,6 +387,7 @@ export function simulateTrade(
       if (record.buyHigh != null && buyDayK.open > record.buyHigh) {
         trade.status = 'invalid';
         trade.buyDate = buyDate;
+        trade.invalidDate = buyDate;
         trade.buyPrice = null;
         trade.sellReason = 'unknown';
         trade.anomalies = ['high_open_unfilled'];

@@ -530,6 +530,7 @@ export function useWinRateRecorder() {
         const ok = updateTrade(rec.id, {
           buyDate: trade.buyDate,
           buyPrice: trade.buyPrice,
+          invalidDate: trade.invalidDate ?? null, // 未成交判定日，明细表「信号 / 判定日」列使用
           sellDate: trade.sellDate,
           sellPrice: trade.sellPrice,
           holdDays: trade.holdDays,
