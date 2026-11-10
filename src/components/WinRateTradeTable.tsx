@@ -56,6 +56,24 @@ function signalDate(r: WinRateRecord): string | null {
   return r.date;
 }
 
+/** 已记录行的买入计划文案（按买入时机） */
+function buyTimingPlanLabel(t: WinRateRecord['buyTiming']): string {
+  if (t === 't_close') return '记录日尾盘买入（收盘价待定）';
+  if (t === 't_close_or_next_open') return '记录日收盘优先，买不到顺延次日';
+  return '次日开盘买入';
+}
+
+/**
+ * 混合时机顺延留痕（零字段方案）：实际买入/判定日与记录日不同即为顺延。
+ * 不加 anomaly —— winrate-stats 的 excludeAnomaly 会把带任意 anomaly 的记录排除胜率分母。
+ */
+function deferredNote(r: WinRateRecord): string {
+  if (r.buyTiming !== 't_close_or_next_open') return '';
+  const actual = r.trade.buyDate ?? r.trade.invalidDate;
+  if (!actual) return '';
+  return actual === r.date ? ' · 记录日收盘买入' : ' · 记录日买不到，顺延次日';
+}
+
 /** 交易明细表：支持按战法/时间/收益率排序，按状态筛选；异常标注仅经 ANOMALY_LABELS 取中文 */
 export function WinRateTradeTable({ records, onSelect }: Props) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -199,12 +217,13 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                     </td>
                     <td>{SELL_REASON_LABELS[r.trade.sellReason]}</td>
                     <td className="wr-rule-note">
-                      {tradeInvalidNote(r) ??
-                        (category === 'recorded'
-                          ? r.buyTiming === 't_close'
-                            ? '记录日尾盘买入（收盘价待定）'
-                            : '次日开盘买入'
-                          : tradeRuleNote(r))}
+                      {(() => {
+                        const invalid = tradeInvalidNote(r);
+                        const defer = deferredNote(r);
+                        if (invalid) return invalid + defer;
+                        if (category === 'recorded') return buyTimingPlanLabel(r.buyTiming);
+                        return tradeRuleNote(r) + defer;
+                      })()}
                     </td>
                     <td>
                       <span className={`wr-status wr-status-${category}`}>

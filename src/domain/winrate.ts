@@ -20,8 +20,16 @@ export type TradeStatus =
   | 'invalid' // 信号失效（v1 仅留接口，引擎后续判定）
   | 'anomaly'; // 数据异常（如价格缺失），仅标记不计入正常胜率
 
-/** 买入时机：t_close=记录日收盘买入；t_next_open=记录日次日开盘买入（默认） */
-export type BuyTiming = 't_close' | 't_next_open';
+/**
+ * 买入时机：
+ *  - t_close：记录日收盘买入；封板或收盘价超区间 → 直接未成交。
+ *  - t_next_open（默认）：记录日次日开盘买入。
+ *  - t_close_or_next_open：优先记录日收盘买入（收盘价在区间内且未封死涨停）；
+ *    买不到（收盘过高/过低、或封死涨停）则顺延次日，按 t_next_open 规则判定。
+ *    顺延与否可用 trade.buyDate !== record.date 推断，无需额外字段。
+ *  三种时机统一 T+1：首次可卖日 = 实际买入日的下一交易日。
+ */
+export type BuyTiming = 't_close' | 't_next_open' | 't_close_or_next_open';
 
 /**
  * 卖出原因。

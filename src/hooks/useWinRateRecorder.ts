@@ -390,15 +390,16 @@ export function useWinRateRecorder() {
           if (!unbuyable) {
             // T+1 可卖日预估（best-effort）：记录时买入日 K 通常尚未产生，算不出属正常现象，
             // 绝不在记录时盖 data_missing（data_missing 只由结算逻辑在买入日真正缺失时判定）。
-            // 买入时机分支：t_close 买入日=记录日（取同日期索引）；t_next_open 买入日=次日（取其后首交易日）。
+            // 买入时机分支：优先记录日的（t_close / 混合）取记录日索引；t_next_open 取次日。
+            // 混合时机可能顺延，这里只是 best-effort 预估；结算时会按 trade.buyDate 重算 tPlus1SellDate。
             try {
               const k = await marketApi.kline(hit.fullCode, 'day', 'qfq', KLINE_COUNT);
               const daily = k.rows ?? [];
               const bt: BuyTiming = cfg.buyTiming ?? 't_next_open';
-              const idx =
-                bt === 't_close'
-                  ? daily.findIndex((r) => r.date === date)
-                  : firstIndexAfter(daily, date);
+              const preferToday = bt === 't_close' || bt === 't_close_or_next_open';
+              const idx = preferToday
+                ? daily.findIndex((r) => r.date === date)
+                : firstIndexAfter(daily, date);
               if (idx >= 0 && idx + 1 < daily.length) tPlus1 = daily[idx + 1].date;
               // 否则 tPlus1 保持 null，结算时由 simulateTrade 用完整 K 线重算（买入日未到，不标异常）
             } catch {

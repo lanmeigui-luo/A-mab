@@ -8,16 +8,22 @@
  * ───────────────────────────────────────────────────────────────────────
  * 核心规则（写在此处为唯一口径来源）：
  *
- * 【买入时机 buyTiming】支持两种时机（由 WinRateRecord.buyTiming 决定，缺省 t_next_open）：
+ * 【买入时机 buyTiming】支持三种时机（由 WinRateRecord.buyTiming 决定，缺省 t_next_open）：
  *  - t_next_open（次日开盘买入，默认）：
  *      · 买入日 = 记录日下一交易日(buyDay)；买入价 = buyDay 开盘价。
  *      · 未成交 → status=invalid：高开未成交(high_open_unfilled) / 一字涨停未成交(limit_up_unfilled) /
  *        开盘即≥目标一(high_open_over_target1) / 次新股跳过一字板判定(new_stock_no_limit_check 软提示)。
  *  - t_close（记录日当天收盘买入）：
  *      · 买入日 = 记录日自身(buyDay = record.date)；买入价 = 记录日收盘价。
- *      · 未成交 → status=invalid：收盘低于买低(low_close_unfilled) / 收盘高于买高(high_close_unfilled)。
+ *      · 未成交 → status=invalid：收盘低于买低(low_close_unfilled) / 收盘高于买高(high_close_unfilled) /
+ *        收盘封死涨停(limit_up_filled_close，排除分母)。
  *      · 不执行一字板/高开判定（入场价是收盘价，无跳空）。
- *  - A 股 T+1：首次可卖出日 = 买入日下一交易日；两种时机统一 tPlus1SellDate = buyIdx + 1。
+ *  - t_close_or_next_open（记录日收盘优先，买不到顺延次日）：
+ *      · 记录日收盘价 ∈ [buyLow,buyHigh] 且未封死涨停 → 按记录日收盘价成交，买入日=记录日。
+ *      · 否则（收盘过高/过低、或封死涨停）→ 顺延次日，完全按 t_next_open 规则判定；
+ *        顺延会重绑 buyIdx，因此 T+1 可卖日按【实际买入日】计算，不会提前一天。
+ *      · 纯 t_close 的封板拦截不变；仅混合时机才顺延。顺延可用 trade.buyDate !== record.date 推断。
+ *  - A 股 T+1：首次可卖出日 = 实际买入日下一交易日；三种时机统一 tPlus1SellDate = buyIdx + 1。
  *  - 交易日历 = K 线日期序列（本引擎不依赖任何外部日历工具）。
  *
  * 【未成交 → 信号失效(invalid)】
@@ -160,25 +166,49 @@ function indexOfDate(klines: KlineRow[], date: string): number {
   return -1;
 }
 
+/** 是否把「记录日」作为最早候选买入日（需要用到当日收盘价、须等 K 线定稿） */
+function prefersCloseToday(buyTiming: BuyTiming): boolean {
+  return buyTiming === 't_close' || buyTiming === 't_close_or_next_open';
+}
+
 /**
- * 定位买入日在 K 线中的索引 —— 引擎与结算侧【唯一口径】。
- *  t_close：买入日 = 记录日当天（精确日期匹配）
- *  t_next_open（默认）：买入日 = 记录日后首个交易日
- * 返回 -1 = 买入日 K 尚未产生（t_close 时也可能记录日不在 K 线中）。
- * 抽成共享函数是为避免结算侧曾无条件用 firstIndexAfter、与 t_close 口径错位。
+ * 定位【最早候选买入日】在 K 线中的索引 —— 引擎与结算侧【唯一口径】。
+ *  t_close / t_close_or_next_open：记录日当天（精确日期匹配）
+ *  t_next_open（默认）：记录日后首个交易日
+ * 返回 -1 = 候选买入日 K 尚未产生。
+ * 注意：混合时机下 simulateTrade 可能顺延到次日，实际买入日由引擎内部重绑，
+ * 这里返回的是「优先尝试日」，供结算守卫判断记录日 K 是否定稿。
  */
 export function locateBuyDayIndex(record: WinRateRecord, dailyK: KlineRow[]): number {
   const buyTiming: BuyTiming = record.buyTiming ?? 't_next_open';
-  return buyTiming === 't_close'
+  return prefersCloseToday(buyTiming)
     ? indexOfDate(dailyK, record.date)
     : firstIndexAfter(dailyK, record.date);
 }
 
 /**
+ * 是否「收盘封死涨停」（实盘买不进）。
+ * 判据与 t_close 分支一致：close===high 且 涨幅 ≥ 涨停限制 - 容差，需要前一根 K 的收盘价。
+ * 数据缺失（无前 K / 前收非正）一律返回 false，沿用「缺失不拦截」原则。
+ * t_close 据此直接判未成交；t_close_or_next_open 据此决定是否顺延次日。
+ */
+function sealedLimitUpAt(
+  dayK: KlineRow,
+  prevK: KlineRow | undefined,
+  code: string,
+  isST: boolean,
+): boolean {
+  if (!prevK || !(prevK.close > 0)) return false;
+  const changeRate = (dayK.close - prevK.close) / prevK.close;
+  return dayK.close === dayK.high && changeRate >= getLimitPct(code, isST) - LIMIT_TOLERANCE;
+}
+
+/**
  * 结算推进判定（recorder 守卫，纯函数便于离线验收）。
- *  - 买入日 K 未产生 → false，保持「已记录/待买入」。
- *  - t_close：买入日 = 记录日，记录窗口（14:50-15:00）内该 K 可能仍是盘中快照，
- *    需等记录日之后出现新 K 才视为收盘定稿，避免用盘中价冒充收盘价。
+ *  - 候选买入日 K 未产生 → false，保持「已记录/待买入」。
+ *  - t_close / t_close_or_next_open：优先尝试日 = 记录日，记录窗口（14:50-15:00）内该 K
+ *    可能仍是盘中快照，需等记录日之后出现新 K 才视为收盘定稿，避免用盘中价冒充收盘价。
+ *    （混合时机若顺延，这根"新 K"也正好是次日买入日，必须存在。）
  *  - t_next_open：买入日 K 一旦存在即为完整收盘日 K，**即使其后的 T+1 卖出日 K 未产生也允许结算**。
  *    simulateTrade 在 tPlus1SellDate == null 时会返回 open 并保留 buyPrice（不标 data_missing），
  *    因此买入日收盘即可落盘买入价，记录当天即可从「待买入」迁移到「持仓中」。
@@ -188,7 +218,7 @@ export function canSettleRecord(record: WinRateRecord, dailyK: KlineRow[]): bool
   const buyTiming: BuyTiming = record.buyTiming ?? 't_next_open';
   const buyIdx = locateBuyDayIndex(record, dailyK);
   if (buyIdx < 0) return false;
-  if (buyTiming === 't_close' && buyIdx + 1 >= dailyK.length) return false;
+  if (prefersCloseToday(buyTiming) && buyIdx + 1 >= dailyK.length) return false;
   return true;
 }
 
@@ -255,19 +285,46 @@ export function simulateTrade(
   const isST = options.isST ?? isSTFromName(record.name);
   const code = record.code;
 
-  // ── 定位买入日（与结算侧共用 locateBuyDayIndex，口径唯一）──────────────
-  const buyTiming: BuyTiming = record.buyTiming ?? 't_next_open';
-  const buyIdx = locateBuyDayIndex(record, dailyK);
+  // ── 定位【最早候选买入日】（与结算侧共用 locateBuyDayIndex，口径唯一）──────
+  let buyTiming: BuyTiming = record.buyTiming ?? 't_next_open';
+  let buyIdx = locateBuyDayIndex(record, dailyK);
   if (buyIdx < 0) {
-    // 无法定位买入日：t_close 时记录日不在 K 线中；t_next_open 时记录日后无交易日
+    // 无法定位候选买入日：记录日不在 K 线中 / 记录日后无交易日
     trade.status = 'anomaly';
     trade.anomalies = ['data_missing'];
     return { trade, tPlus1SellDate: null };
   }
 
-  const buyDayK = dailyK[buyIdx];
-  const buyDate = buyDayK.date;
+  let buyDayK = dailyK[buyIdx];
+  let buyDate = buyDayK.date;
   const anomalies: WinRateAnomaly[] = [];
+
+  // ── 混合时机「前置降解」：先判记录日能不能买，再复用下面 t_close / t_next_open 两段逻辑 ──
+  // 关键：顺延必须重绑 buyIdx / buyDayK / buyDate，否则 T+1 可卖日（sellStartIdx = buyIdx+1）
+  // 会按记录日算、把可卖日提前一天。降解后下方分支与 T+1 计算一行都不用改。
+  if (buyTiming === 't_close_or_next_open') {
+    const tIdx = buyIdx;
+    const tDayK = dailyK[tIdx];
+    const skipSealedCheck = tIdx < 5; // 次新股：历史不足，沿用 t_close 的跳过约定
+    const sealed = !skipSealedCheck && sealedLimitUpAt(tDayK, dailyK[tIdx - 1], code, isST);
+    const closeInRange =
+      (record.buyLow == null || tDayK.close >= record.buyLow) &&
+      (record.buyHigh == null || tDayK.close <= record.buyHigh);
+    if (closeInRange && !sealed) {
+      buyTiming = 't_close'; // 记录日收盘买入（下方 t_close 分支会再校验一次，口径一致）
+    } else {
+      // 收盘过高/过低、或封死涨停买不进 → 顺延次日，按 t_next_open 规则独立判定
+      buyTiming = 't_next_open';
+      buyIdx = firstIndexAfter(dailyK, record.date);
+      if (buyIdx < 0) {
+        trade.status = 'anomaly';
+        trade.anomalies = ['data_missing'];
+        return { trade, tPlus1SellDate: null };
+      }
+      buyDayK = dailyK[buyIdx];
+      buyDate = buyDayK.date;
+    }
+  }
 
   // ── 未成交判定 + 成交价（按买入时机分支）─────────────────────────────
   let buyPrice: number;
@@ -280,22 +337,17 @@ export function simulateTrade(
     if (skipLimitUpCheck) {
       anomalies.push('new_stock_no_limit_check');
     }
-    const prevK = dailyK[buyIdx - 1];
-    if (!skipLimitUpCheck && prevK) {
-      const prevClose = prevK.close;
-      const limitPct = getLimitPct(code, isST);
-      const changeRate = (buyDayK.close - prevClose) / prevClose;
-      const sealedLimitUp = buyDayK.close === buyDayK.high && changeRate >= limitPct - LIMIT_TOLERANCE;
-      if (sealedLimitUp) {
-        trade.status = 'invalid';
-        trade.buyDate = buyDate;
-        trade.invalidDate = buyDate;
-        trade.buyPrice = null;
-        trade.sellReason = 'unknown';
-        trade.anomalies = ['limit_up_filled_close'];
-        trade.excludedFromStats = true;
-        return { trade, tPlus1SellDate: null };
-      }
+    // 与混合时机前置判定共用 sealedLimitUpAt，保证「记录日封板」判据唯一。
+    // 只有纯 t_close（或降解为 t_close 且确实未封板）会走到这里；混合时机封板时已顺延，不会进入本分支。
+    if (!skipLimitUpCheck && sealedLimitUpAt(buyDayK, dailyK[buyIdx - 1], code, isST)) {
+      trade.status = 'invalid';
+      trade.buyDate = buyDate;
+      trade.invalidDate = buyDate;
+      trade.buyPrice = null;
+      trade.sellReason = 'unknown';
+      trade.anomalies = ['limit_up_filled_close'];
+      trade.excludedFromStats = true;
+      return { trade, tPlus1SellDate: null };
     }
     // 未封板：以收盘价判定是否落入买入区间 [buyLow, buyHigh]
     const close = buyDayK.close;

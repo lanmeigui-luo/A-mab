@@ -322,7 +322,13 @@ export function WinRateTradeDetailModal({
             {record.trade.status === 'open' && (
               <div className="wr-open-banner">
                 {category === 'recorded'
-                  ? `已记录，等待${record.buyTiming === 't_close' ? '记录日尾盘' : '次日开盘'}买入`
+                  ? `已记录，等待${
+                      record.buyTiming === 't_close'
+                        ? '记录日尾盘'
+                        : record.buyTiming === 't_close_or_next_open'
+                          ? '记录日收盘（买不到顺延次日）'
+                          : '次日开盘'
+                    }买入`
                   : `持仓中，等待触发卖出条件${
                       record.tPlus1SellDate
                         ? `（T+1 可卖日：${record.tPlus1SellDate}）`

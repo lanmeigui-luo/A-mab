@@ -19,7 +19,7 @@ import {
   tradeViewCategory,
   TRADE_VIEW_STATUS_LABELS,
 } from '../src/domain/winrate';
-import { TRADE_RULE_VERSION } from '../src/domain/winrate-config';
+import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
 import type { KlineRow } from '../src/domain/types';
 import {
@@ -1228,6 +1228,137 @@ function runInvalidDateAssertion() {
   }
 }
 
+// ───────── 混合买入时机 t_close_or_next_open（本轮新增 M1-M10） ─────────
+function runHybridBuyTimingAssertion() {
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 12, target2: 13, holdMax: 1 };
+  // buyHigh 高于涨停价，用于构造「收盘价在区间内但封死涨停」这一边界（M4/M5）
+  const widePlan = { ...plan, buyHigh: 11.5 };
+  const mk = (p: typeof plan) => {
+    const r = makeRec({ date: '2026-01-01', ...p });
+    r.buyTiming = 't_close_or_next_open';
+    return r;
+  };
+  const recDay = (close: number, high = close, open = 10.0, low = 9.9) =>
+    k('2026-01-01', open, high, low, close);
+  const nextDay = (open = 10.2, high = 10.4, low = 10.0, close = 10.3) =>
+    k('2026-01-02', open, high, low, close);
+  const thirdDay = k('2026-01-03', 10.3, 10.5, 10.2, 10.4);
+
+  section('混合时机 M1：记录日收盘在区间内、未封板 → 当天买入成功');
+  {
+    const r = mk(plan);
+    const daily = [...HIST, recDay(10.3, 10.4), k('2026-01-02', 10.4, 11.6, 10.3, 11.4)];
+    const { trade, tPlus1SellDate } = simulateTrade(r, daily);
+    check(trade.buyDate === '2026-01-01', `买入日=记录日 (实际: ${trade.buyDate})`);
+    check(trade.buyPrice === 10.3, `买入价=收盘 10.3 (实际: ${trade.buyPrice})`);
+    check(tPlus1SellDate === '2026-01-02', `T+1 可卖日=次日 (实际: ${tPlus1SellDate})`);
+    check(trade.status === 'closed', `正常平仓 (实际: ${trade.status})`);
+    check(trade.buyDate === r.date, '零字段留痕：买入日=记录日，可判定为「当天买入」');
+  }
+
+  section('混合时机 M2：记录日收盘超上限/低于下限 → 顺延次日买入成功');
+  {
+    const r = mk(plan);
+    const daily = [...HIST, recDay(10.9, 11.0), nextDay(), thirdDay];
+    const { trade, tPlus1SellDate } = simulateTrade(r, daily);
+    check(trade.buyDate === '2026-01-02', `顺延买入日=次日 (实际: ${trade.buyDate})`);
+    check(trade.buyPrice === 10.2, `买入价=次日开盘 10.2 (实际: ${trade.buyPrice})`);
+    check(tPlus1SellDate === '2026-01-03', `T+1 可卖日按实际买入日+1 (实际: ${tPlus1SellDate})`);
+    check(trade.buyDate !== r.date, '零字段留痕：买入日≠记录日，可判定为「顺延」');
+    // 过低同样顺延
+    const r2 = mk(plan);
+    const daily2 = [...HIST, recDay(9.2, 9.8, 9.0, 8.9), nextDay(), thirdDay];
+    const t2 = simulateTrade(r2, daily2).trade;
+    check(t2.buyDate === '2026-01-02' && t2.buyPrice === 10.2, `收盘过低也顺延 (实际: ${t2.buyDate}/${t2.buyPrice})`);
+  }
+
+  section('混合时机 M3：记录日超上限 → 次日高开未成交');
+  {
+    const r = mk(plan);
+    const daily = [...HIST, recDay(10.9, 11.0), k('2026-01-02', 10.8, 10.9, 10.7, 10.85), thirdDay];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('high_open_unfilled'), `anomaly 正确 (实际: ${trade.anomalies})`);
+    check(trade.invalidDate === '2026-01-02', `判定日=次日 (实际: ${trade.invalidDate})`);
+  }
+
+  section('混合时机 M4：收盘在区间内但封死涨停 → 顺延次日买入成功（不判失效）');
+  {
+    const r = mk(widePlan);
+    const daily = [...HIST, k('2026-01-01', 10.5, 11.0, 10.4, 11.0), nextDay(), thirdDay];
+    const { trade, tPlus1SellDate } = simulateTrade(r, daily);
+    check(trade.status !== 'invalid', `不在记录日直接判失效 (实际: ${trade.status})`);
+    check(!trade.anomalies.includes('limit_up_filled_close'), `不出现封板失效 (实际: ${trade.anomalies})`);
+    check(trade.excludedFromStats !== true, '不设 excludedFromStats（顺延不是排除分母）');
+    check(trade.buyDate === '2026-01-02', `顺延买入日=次日 (实际: ${trade.buyDate})`);
+    check(trade.buyPrice === 10.2, `买入价=次日真实开盘 10.2 (实际: ${trade.buyPrice})`);
+    check(tPlus1SellDate === '2026-01-03', `T+1 可卖日=2026-01-03 (实际: ${tPlus1SellDate})`);
+  }
+
+  section('混合时机 M5：记录日封板 → 次日一字板未成交');
+  {
+    const r = mk(widePlan);
+    const daily = [...HIST, k('2026-01-01', 10.5, 11.0, 10.4, 11.0), k('2026-01-02', 12.1, 12.1, 12.1, 12.1)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('limit_up_unfilled'), `anomaly 正确 (实际: ${trade.anomalies})`);
+    check(trade.invalidDate === '2026-01-02', `判定日=次日 (实际: ${trade.invalidDate})`);
+  }
+
+  section('混合时机 M6：T+1 约束在当天买入与顺延两种情况下都正确');
+  {
+    const r1 = mk(plan);
+    const a = simulateTrade(r1, [...HIST, recDay(10.3, 10.4), k('2026-01-02', 10.4, 11.6, 10.3, 11.4)]).trade;
+    check(a.sellDate != null && a.buyDate != null && a.sellDate > a.buyDate, '当天买入：卖出日 > 买入日');
+    const r2 = mk(plan);
+    const b = simulateTrade(r2, [...HIST, recDay(10.9, 11.0), nextDay(), thirdDay]).trade;
+    check(b.sellDate != null && b.buyDate != null && b.sellDate > b.buyDate, '顺延买入：卖出日 > 买入日');
+  }
+
+  section('混合时机 M7：顺延留痕可用 buyDate !== record.date 推断（零字段方案）');
+  {
+    const today = mk(plan);
+    const a = simulateTrade(today, [...HIST, recDay(10.3, 10.4), k('2026-01-02', 10.4, 11.6, 10.3, 11.4)]).trade;
+    check(a.buyDate === today.date, '当天买入 → 相等');
+    const deferred = mk(plan);
+    const b = simulateTrade(deferred, [...HIST, recDay(10.9, 11.0), nextDay(), thirdDay]).trade;
+    check(b.buyDate !== deferred.date, '顺延 → 不等');
+  }
+
+  section('混合时机 M8：结算守卫要求记录日 K 定稿（防盘中快照当收盘价）');
+  {
+    const r = mk(plan);
+    const onlyToday = [...HIST, recDay(10.3, 10.4)];
+    check(locateBuyDayIndex(r, onlyToday) === HIST.length, `候选买入日=记录日索引 (实际: ${locateBuyDayIndex(r, onlyToday)})`);
+    check(canSettleRecord(r, onlyToday) === false, '仅到记录日 → 不结算');
+    check(canSettleRecord(r, [...onlyToday, nextDay()]) === true, '含次日 K → 放行结算');
+  }
+
+  section('混合时机 M9：回归——纯 t_close / 纯 t_next_open 行为不变');
+  {
+    const sealed = makeRec({ date: '2026-01-01', ...plan });
+    sealed.buyTiming = 't_close';
+    const t1 = simulateTrade(sealed, [...HIST, k('2026-01-01', 10.5, 11.0, 10.4, 11.0)]).trade;
+    check(t1.anomalies.includes('limit_up_filled_close'), '纯 t_close 封板仍判封板失效');
+    check(t1.excludedFromStats === true, '纯 t_close 封板仍排除分母');
+    const next = makeRec({ date: '2026-01-01', ...plan });
+    next.buyTiming = 't_next_open';
+    const t2 = simulateTrade(next, [...HIST, recDay(10.9, 11.0), nextDay(), thirdDay]).trade;
+    check(t2.status !== 'invalid', `纯 t_next_open 不看记录日收盘 (实际: ${t2.status})`);
+    check(t2.buyDate === '2026-01-02' && t2.buyPrice === 10.2, '纯 t_next_open 仍按次日开盘成交');
+  }
+
+  section('混合时机 M10：战法配置生效范围');
+  {
+    const c = WINRATE_STRATEGY_CONFIG;
+    check(c['first-board'].buyTiming === 't_close_or_next_open', '首板打板 → 混合');
+    check(c['dragon'].buyTiming === 't_close_or_next_open', '龙头战法 → 混合');
+    check(c['pullback-buy'].buyTiming === 't_close_or_next_open', '低吸回踩 → 混合');
+    check(c['board-advance'].buyTiming === 't_next_open', '连板晋级保持次日买（与上轮决策一致）');
+    check(c['overnight-hold'].buyTiming === 't_close', '隔夜持股法保持尾盘买（顺延会破坏定义）');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1240,6 +1371,7 @@ async function main() {
   runSettleGuardAssertion();
   runExecutionRateAssertion();
   runInvalidDateAssertion();
+  runHybridBuyTimingAssertion();
   await runMinuteAssertions();
   runMinuteStatsAssertion();
 

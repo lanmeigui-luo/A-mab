@@ -81,12 +81,12 @@ interface RawDef {
 
 /** 已核对的后端 STRATEGY_DEFS 子集（id / name / holding / available / 规则说明） */
 const RAW_DEFS: RawDef[] = [
-  { id: 'first-board', name: '首板打板', holding: '次日', available: true, buyTiming: 't_close', ruleNote: '次日冲高或封板走弱即离场，持股 ≤1 个交易日' },
+  { id: 'first-board', name: '首板打板', holding: '次日', available: true, buyTiming: 't_close_or_next_open', ruleNote: '记录日收盘优先、封板或超区间顺延次日；次日冲高或封板走弱即离场，持股 ≤1 个交易日' },
   { id: 'board-advance', name: '连板晋级', holding: '次日', available: true, buyTiming: 't_next_open', ruleNote: '次日换手晋级失败即离场，持股 ≤1 个交易日' },
   { id: 'trend-break', name: '趋势突破', holding: '5-20 天', available: true, buyTiming: 't_next_open', ruleNote: '突破后沿趋势持有 5-20 个交易日，跌破关键支撑离场' },
   { id: 'ma-bull', name: '均线多头', holding: '10-30 天', available: true, buyTiming: 't_next_open', ruleNote: '均线多头排列中持有 10-30 个交易日，均线走坏离场' },
-  { id: 'dragon', name: '龙头战法', holding: '1-5 天', available: true, buyTiming: 't_close', ruleNote: '龙头主升持有 1-5 个交易日，断板即走' },
-  { id: 'pullback-buy', name: '低吸回踩', holding: '3-10 天', available: true, buyTiming: 't_next_open', ruleNote: '回踩确认后持有 3-10 个交易日，放量跌破防守线离场' },
+  { id: 'dragon', name: '龙头战法', holding: '1-5 天', available: true, buyTiming: 't_close_or_next_open', ruleNote: '记录日收盘优先、封板或超区间顺延次日；龙头主升持有 1-5 个交易日，断板即走' },
+  { id: 'pullback-buy', name: '低吸回踩', holding: '3-10 天', available: true, buyTiming: 't_close_or_next_open', ruleNote: '记录日收盘优先、未进伏击圈顺延次日；回踩确认后持有 3-10 个交易日，放量跌破防守线离场' },
   { id: 'dragon-return', name: '龙回头', holding: '3-10 天', available: true, buyTiming: 't_next_open', ruleNote: '反攻确认后持有 3-10 个交易日，再度走弱离场' },
   { id: 'oversold-bounce', name: '超跌反弹', holding: '3-10 天', available: true, buyTiming: 't_next_open', ruleNote: '反弹确认后持有 3-10 个交易日，反弹衰竭离场' },
   { id: 'ultra-short', name: '超短线战法', holding: '1-3 天', available: true, buyTiming: 't_next_open', ruleNote: '持股 1-3 个交易日，次日不强即走' },
