@@ -337,6 +337,25 @@ export function WinRateTradeDetailModal({
               </div>
             )}
 
+            {record.trade.monitorClosed && (
+              <div
+                className="wr-monitor-closed-banner"
+                style={{
+                  marginTop: 10,
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  background: 'linear-gradient(90deg, #eff6ff, #dbeafe)',
+                  border: '1px solid #93c5fd',
+                  color: '#1d4ed8',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                }}
+              >
+                盘中实时监控平仓：由实时 1 分钟线触发，已于盘中自动了结（触发价{' '}
+                {record.trade.sellPrice != null ? fmtNum(record.trade.sellPrice) : '—'}）
+              </div>
+            )}
+
             {/* 记录日买卖计划（记录时生成，计划价；区别于上方实际成交的买入价/卖出价） */}
             <div className="plan-box wr-plan-snapshot">
               <div className="plan-head">记录日买卖计划（计划价）</div>

@@ -41,7 +41,7 @@ export interface MinuteBar {
 }
 
 /** fetchBars：注入的分钟线拉取函数（便于测试 mock；真实实现走 marketApi.klineMin） */
-export type FetchMinuteBars = (code: string, period: 1 | 5 | 15) => Promise<MinuteBar[]>;
+export type FetchMinuteBars = (code: string, period: 1 | 5 | 15, limit?: number) => Promise<MinuteBar[]>;
 
 /** 时效阈值：30 交易日（有交易日历时）；无日历时按 42 自然日近似（×1.4，非精确交易日） */
 const PENDING_ABANDON_TRADING_DAYS = 30;
@@ -125,6 +125,8 @@ export interface DisambiguateResult {
   resolved: boolean;
   reason?: SellReason; // 'stop_loss' | 'target1' | 'target2'
   sellPrice?: number;
+  /** 触发 bar 在输入序列中的索引（供调用方取触发时刻）；未定序/歧义时为 undefined */
+  idx?: number;
 }
 
 /**
@@ -153,7 +155,7 @@ export function disambiguateIntraday(input: DisambiguateInput): DisambiguateResu
   // 若止损与某目标在同一根 bar → 该粒度无法定序
   const sameBar = candidates.filter((c) => c.idx === win.idx);
   if (sameBar.length > 1) return { resolved: false };
-  return { resolved: true, reason: win.reason, sellPrice: win.price };
+  return { resolved: true, reason: win.reason, sellPrice: win.price, idx: win.idx };
 }
 
 /** 复刻 sim ③：从日 K 找出首个可卖日双边触及（low≤stop 且 high≥target1，且开盘未跳空）的候选日 */

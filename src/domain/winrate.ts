@@ -310,6 +310,11 @@ export interface TradeRecord {
     resolvedAt: string | null;
     version: string | null;
   } | null;
+  /**
+   * 是否由「盘中实时监控」（前端常驻 1min 引擎）平仓。
+   * 透明度标记：详情页据此显示「盘中实时监控平仓」，与日K结算平仓区分；不改变已平仓本质。
+   */
+  monitorClosed?: boolean;
 }
 
 /** 价格/信号来源口径：区分盘中尾盘快照与未来收盘快照，统计层据此隔离，不可混算 */

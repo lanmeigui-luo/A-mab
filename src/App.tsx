@@ -14,6 +14,7 @@ import { useWatchList } from '@/hooks/useWatchList';
 import { useStrategyParams } from '@/hooks/useStrategyParams';
 import { useColorBlind } from '@/hooks/useColorBlind';
 import { useWinRateRecorder } from '@/hooks/useWinRateRecorder';
+import { useIntradayMonitor } from '@/hooks/useIntradayMonitor';
 import { marketApi } from '@/services/market';
 import { INDEX_DEFS } from '@/domain/types';
 import type { BoardType } from '@/domain/board';
@@ -64,6 +65,8 @@ export default function App() {
   // P2b 修复：应用打开即跑一次每日周期（记录/结算）。
   // 此前该调用点从未落地，导致 winrate Tab 始终 recordsLength=0（仅窗口命中时才可能因别处触发，实际没有任何调用点）。
   const recorder = useWinRateRecorder();
+  // P2c：盘中 1 分钟级实时监控（前端常驻，全局生效，任意页面都跑）
+  useIntradayMonitor();
   useEffect(() => {
     recorder.runDailyCycle().catch(() => undefined);
   }, [recorder.runDailyCycle]);

@@ -40,7 +40,6 @@ import {
   getWinRateConfig,
   STRATEGY_PARAM_VERSION,
   TRADE_RULE_VERSION,
-  DEFAULT_RECORD_CUTOFF,
   type StrategyWinRateConfig,
 } from '../domain/winrate-config';
 import { simulateTrade, canSettleRecord, type SimSuspensionRange } from '../lib/winrate-sim';
@@ -62,6 +61,7 @@ import {
   type MinuteResolveMeta,
 } from '../domain/winrate';
 import { useWinRateStore, getLiveRecords, applyMinuteResolution, registerMinuteResolver } from './useWinRateStore';
+import { isWithinRecordWindow, isWeekday } from '../lib/tradingTime';
 
 const RECORD_TOP_N = 5;
 const KLINE_COUNT = 250;
@@ -69,40 +69,12 @@ const REF_INDEX_CODE = 'sh000001';
 /** 待补日期回看窗口（自然日）：getPendingDays 仅回看最近 N 天的工作日 */
 const PENDING_LOOKBACK_DAYS = 15;
 
-/** 解析 'HH:MM' → 当日分钟数 */
-function parseHHMM(hhmm: string): number {
-  const [h, m] = hhmm.split(':').map((x) => parseInt(x, 10));
-  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
-}
-const RECORD_CUTOFF_MINS = parseHHMM(DEFAULT_RECORD_CUTOFF); // 默认 14:50 → 890
-const MARKET_CLOSE_MINS = 15 * 60; // 15:00 → 900
-
 /** 本地日期 YYYY-MM-DD（避免 UTC 偏移吞日期） */
 function localDate(d = new Date()): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
-
-/** 是否工作日 */
-function isWeekday(d: Date): boolean {
-  const day = d.getDay();
-  return day !== 0 && day !== 6;
-}
-
-/** 交易时段（工作日 9:30-15:00）。后端排行榜仅在此能发现新候选。 */
-function isWithinTradingHours(d = new Date()): boolean {
-  if (!isWeekday(d)) return false;
-  const mins = d.getHours() * 60 + d.getMinutes();
-  return mins >= 9 * 60 + 30 && mins <= MARKET_CLOSE_MINS;
-}
-
-/** 记录窗口：交易时段内 且 当前时刻 ∈ [14:50, 15:00] */
-function isWithinRecordWindow(d = new Date()): boolean {
-  if (!isWithinTradingHours(d)) return false;
-  const mins = d.getHours() * 60 + d.getMinutes();
-  return mins >= RECORD_CUTOFF_MINS && mins <= MARKET_CLOSE_MINS;
 }
 
 /**
@@ -133,10 +105,14 @@ function toFullCode(code: string): string {
   return 'sz' + c;
 }
 
-/** 模块级：分钟线拉取（marketApi.klineMin → MinuteBar[]），供内联结算与启动重试共用 */
-const fetchMinuteBars: FetchMinuteBars = async (code6: string, period: 1 | 5 | 15): Promise<MinuteBar[]> => {
+/** 模块级：分钟线拉取（marketApi.klineMin → MinuteBar[]），供内联结算、启动重试与盘中实时监控共用 */
+export const fetchMinuteBars: FetchMinuteBars = async (
+  code6: string,
+  period: 1 | 5 | 15,
+  limit = 1000,
+): Promise<MinuteBar[]> => {
   try {
-    const res = await marketApi.klineMin(code6, String(period), 'qfq', 1000);
+    const res = await marketApi.klineMin(code6, String(period), 'qfq', limit);
     return (res.rows ?? []).map(toMinuteBar);
   } catch {
     return [];

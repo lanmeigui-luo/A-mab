@@ -5,6 +5,7 @@ import { computeWinRateStats, filterWinRateRecords, HOLD_DAYS_BUCKETS } from '..
 import type { WinRateFilter } from '../lib/winrate-stats';
 import type { PriceSource, WinRateRecord } from '../domain/winrate';
 import { listEnabledStrategies } from '../domain/winrate-config';
+import { isWithinTradingHours } from '../lib/tradingTime';
 import { WinRateOverviewCard } from './WinRateOverviewCard';
 import { WinRateTradeTable } from './WinRateTradeTable';
 import { WinRateTradeDetailModal } from './WinRateTradeDetailModal';
@@ -131,9 +132,40 @@ function WinRateScreenInner({
 
   const hasData = records.length > 0;
   const hasFiltered = filteredRecords.length > 0;
+  const openCount = records.filter((r) => r.trade.status === 'open').length;
 
   return (
     <div className="wr-screen">
+      {/* 盘中实时监控 banner：仅交易时段内显示，提示用户当前有持仓正在被 1 分钟级引擎监控 */}
+      {isWithinTradingHours() && (
+        <div
+          className="wr-monitor-banner"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 12,
+            padding: '8px 14px',
+            borderRadius: 8,
+            background: 'linear-gradient(90deg, #fff7ed, #fef3c7)',
+            border: '1px solid #fcd34d',
+            color: '#92400e',
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: '#f59e0b',
+              display: 'inline-block',
+            }}
+          />
+          盘中实时监控中{openCount > 0 ? `（监控 ${openCount} 笔持仓）` : ''}
+        </div>
+      )}
       {/* 顶部筛选区 + 统计口径说明 */}
       <div className="panel wr-filter">
         <div className="panel-head">
