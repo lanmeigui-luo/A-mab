@@ -40,6 +40,9 @@ export type BuyTiming = 't_close' | 't_next_open' | 't_close_or_next_open';
  *  - T+1 首可卖日开盘【未】跳空、但买入当日(T日)已触发某一边 → tplus1_*（按首可卖日开盘价成交，计入分母）。
  *  - 可卖日双边触及（low≤stop 且 high≥target1）→ ambiguous_intraday：可卖日双边排除分母；T日双边(首可卖日未跳空)计入分母仅原因歧义。
  *  - 盘中单边：low≤stop→stop_loss；high≥target2→target2；high≥target1→target1（按对应价成交）。
+ *  - 收盘确认动态规则（v-dynamic-exit 起）：以上均未触发时，按当日收盘价判战法专属动态离场
+ *    （断板/破均线/反弹衰竭/走弱/量价背离/隔夜清仓等），按收盘价成交、正常计入胜率。
+ *    仅实现日K(OHLCV)可判定条件；连板池/分时/10:00 时点等无法复现的条件不进引擎。
  */
 export type SellReason =
   | 'target1' // 触及目标一（盘中单边）
@@ -56,7 +59,15 @@ export type SellReason =
   | 'target2_gap' // 任意可卖日开盘跳空越过目标二（按开盘价成交）
   | 'stop_gap' // 任意可卖日开盘跳空跌破止损（按开盘价成交）
   | 'ambiguous_intraday' // 日K（仅 OHLC）无法判定盘中 high/low 先后：双边触及。可卖日双边→排除分母；买入当日双边→计入分母仅原因歧义
-  | 'ambiguous_1min'; // 分钟线（period=1）仍无法判定盘中 high/low 先后（序列缺失 / 同根 bar 双边）→ 排除分母（同 ambiguous_intraday）
+  | 'ambiguous_1min' // 分钟线（period=1）仍无法判定盘中 high/low 先后（序列缺失 / 同根 bar 双边）→ 排除分母（同 ambiguous_intraday）
+  // ── 动态离场（日K尾盘确认制，按收盘价成交，正常计入胜率）──
+  | 'broken_board' // 断板：收盘价 < 今日涨停价（日K近似，无法判连板池）
+  | 'ma_breakdown' // 收盘跌破关键均线（MA20 / MA5 排列走坏）
+  | 'defense_break' // 放量跌破防守线（收盘 < MA10 且量 > 5 日均量）
+  | 'rebound_fade' // 反弹衰竭：收盘价 < MA3
+  | 'weak_close' // 次日走弱：收盘价 < 买入价
+  | 'volume_price_divergence' // 量价背离：收阴且放量，或收盘跌破 MA5
+  | 'overnight_exit'; // 隔夜战法次日强制清仓（日K近似：无法判 10:00 时点，按收盘价离场）
 
 /**
  * 异常标注（数据质量标记，不参与统计，仅展示提示）。
@@ -65,6 +76,7 @@ export type SellReason =
  */
 export type WinRateAnomaly =
   | 'high_open_unfilled' // 次日高开，未成交
+  | 'low_open_unfilled' // 次日低开跌破买入区间下限，未成交（排除分母）
   | 'high_close_unfilled' // 记录日收盘高于买高，未成交
   | 'low_close_unfilled' // 记录日收盘低于买低，未成交
   | 'limit_up_unfilled' // 次日一字涨停，未成交
@@ -82,6 +94,7 @@ export type WinRateAnomaly =
 /** 异常标注中文文案（唯一出处；逻辑层只用 key） */
 export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
   high_open_unfilled: '高开未成交',
+  low_open_unfilled: '低开未成交',
   high_close_unfilled: '收盘高于买高(未成交)',
   low_close_unfilled: '收盘低于买低(未成交)',
   limit_up_unfilled: '一字板未成交',
@@ -114,6 +127,13 @@ export const SELL_REASON_LABELS: Record<SellReason, string> = {
   stop_gap: '跳空止损',
   ambiguous_intraday: '日K无法判定盘中先后',
   ambiguous_1min: '分钟线无法判定盘中先后',
+  broken_board: '断板离场（日K近似）',
+  ma_breakdown: '跌破关键均线',
+  defense_break: '放量跌破防守线',
+  rebound_fade: '反弹衰竭(收盘破MA3)',
+  weak_close: '走弱离场(收盘低于买入价)',
+  volume_price_divergence: '量价背离离场',
+  overnight_exit: '隔夜清仓（日K近似）',
 };
 
 /**
@@ -188,6 +208,7 @@ export function tradeInvalidNote(record: WinRateRecord): string | null {
   if (a.includes('limit_up_filled_close')) return '尾盘封板买不进，未成交';
   if (a.includes('limit_up_unfilled')) return '次日一字板无卖盘，未成交';
   if (a.includes('high_open_unfilled')) return '次日高开超出买入区间，未成交';
+  if (a.includes('low_open_unfilled')) return '次日低开跌破买入区间，未成交';
   if (a.includes('high_close_unfilled') || a.includes('low_close_unfilled'))
     return '收盘价超出买入区间，未成交';
   return '未成交';

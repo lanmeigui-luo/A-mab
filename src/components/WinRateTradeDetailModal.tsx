@@ -467,6 +467,12 @@ export function WinRateTradeDetailModal({
                   <span>参数版本</span>
                   <span>{cfg.paramVersion}</span>
                 </div>
+                <div className="wr-rule-row muted">
+                  <span>回测边界</span>
+                  <span>
+                    连板池 / 分时 / 封单 / 板块资金流 / 10:00 时点等条件由选股层在记录日校验，日K回测无法复现，不进引擎；标注「（日K近似）」的离场为日K收盘价判定近似。
+                  </span>
+                </div>
               </div>
             ) : (
               <div className="muted">未找到该战法配置（{record.strategyId}）</div>

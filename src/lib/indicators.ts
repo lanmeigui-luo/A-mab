@@ -1,4 +1,6 @@
-import type { KlineRow } from '@/domain/types';
+// 用相对路径：离线验收(tsconfig.test.json)刻意收窄编译图、未配 @ 别名，
+// 主工程 tsconfig.json 的 paths 亦兼容相对路径。
+import type { KlineRow } from '../domain/types';
 
 /**
  * 技术指标自算。
@@ -41,6 +43,7 @@ export interface MaSeries {
   ma5: (number | null)[];
   ma10: (number | null)[];
   ma20: (number | null)[];
+  ma30: (number | null)[];
   ma60: (number | null)[];
 }
 
@@ -50,6 +53,7 @@ export function calcMA(rows: KlineRow[]): MaSeries {
     ma5: sma(closes, 5),
     ma10: sma(closes, 10),
     ma20: sma(closes, 20),
+    ma30: sma(closes, 30),
     ma60: sma(closes, 60),
   };
 }

@@ -24,6 +24,11 @@
  *        顺延会重绑 buyIdx，因此 T+1 可卖日按【实际买入日】计算，不会提前一天。
  *      · 纯 t_close 的封板拦截不变；仅混合时机才顺延。顺延可用 trade.buyDate !== record.date 推断。
  *  - A 股 T+1：首次可卖出日 = 实际买入日下一交易日；三种时机统一 tPlus1SellDate = buyIdx + 1。
+ *  - 买入日触发标记（buyDay*Hit）仅对 t_next_open 有效：t_close 按收盘价买入，
+ *    当日盘中 low/high 发生在买入之前，不能驱动次日 tplus1_*（时间倒错修复）。
+ *  - 收盘确认动态规则：盘中固定阈值/双边歧义/盘中单边都未触发时，按当日收盘判
+ *    战法专属动态离场（见 dynamicExitReason），按收盘价成交、计入分母。
+ *    连板池 / 分时 / 10:00 时点等日K无法复现的条件一律不进引擎，不硬凑。
  *  - 交易日历 = K 线日期序列（本引擎不依赖任何外部日历工具）。
  *
  * 【未成交 → 信号失效(invalid)】
@@ -201,6 +206,104 @@ function sealedLimitUpAt(
   if (!prevK || !(prevK.close > 0)) return false;
   const changeRate = (dayK.close - prevK.close) / prevK.close;
   return dayK.close === dayK.high && changeRate >= getLimitPct(code, isST) - LIMIT_TOLERANCE;
+}
+
+/** 今日理论涨停价（用于「断板」的日K近似判定）。无前收则返回 null，不硬凑。 */
+function limitUpPriceAt(
+  prevK: KlineRow | undefined,
+  code: string,
+  isST: boolean,
+): number | null {
+  if (!prevK || !(prevK.close > 0)) return null;
+  return +(prevK.close * (1 + getLimitPct(code, isST))).toFixed(2);
+}
+
+/** 截至 idx（含）的 n 日收盘均价；历史不足返回 null。 */
+function maAt(dailyK: KlineRow[], idx: number, n: number): number | null {
+  if (idx < n - 1) return null;
+  let sum = 0;
+  for (let i = idx - n + 1; i <= idx; i++) sum += dailyK[i].close;
+  return sum / n;
+}
+
+/** 截至 idx（含）的 n 日成交量均值；历史不足返回 null。 */
+function volMaAt(dailyK: KlineRow[], idx: number, n: number): number | null {
+  if (idx < n - 1) return null;
+  let sum = 0;
+  for (let i = idx - n + 1; i <= idx; i++) sum += dailyK[i].volume;
+  return sum / n;
+}
+
+/**
+ * 动态离场（日K尾盘确认制）——只实现日K(OHLCV)能真实判定的条件。
+ * 连板池 / 分时 / 10:00 时点 / 封单 / 板块资金流等无法由日K复现，
+ * 一律不进引擎，仅在 UI 规则说明里标注「由选股层校验，回测无法复现」。
+ * 返回 null 表示当日收盘未触发；触发方按收盘价成交、正常计入胜率。
+ */
+function dynamicExitReason(
+  strategyId: string,
+  dailyK: KlineRow[],
+  i: number,
+  buyPrice: number,
+  code: string,
+  isST: boolean,
+): SellReason | null {
+  const day = dailyK[i];
+  const ma3 = maAt(dailyK, i, 3);
+  const ma5 = maAt(dailyK, i, 5);
+  const ma10 = maAt(dailyK, i, 10);
+  const ma20 = maAt(dailyK, i, 20);
+  const volMa5 = volMaAt(dailyK, i, 5);
+  const limitPrice = limitUpPriceAt(dailyK[i - 1], code, isST);
+
+  switch (strategyId) {
+    // 断板（日K近似）：收盘价 < 今日理论涨停价，即当日未封住涨停
+    case 'first-board':
+    case 'board-advance':
+    case 'dragon':
+      return limitPrice != null && day.close < limitPrice ? 'broken_board' : null;
+    // 跌破关键支撑：收盘跌破 MA20
+    case 'trend-break':
+      return ma20 != null && day.close < ma20 ? 'ma_breakdown' : null;
+    // 均线走坏：MA5 跌破 MA10，或收盘跌破 MA20
+    case 'ma-bull':
+      return (ma5 != null && ma10 != null && ma5 < ma10) || (ma20 != null && day.close < ma20)
+        ? 'ma_breakdown'
+        : null;
+    // 放量跌破防守线：收盘 < MA10 且 量 > 5 日均量
+    case 'pullback-buy':
+      return ma10 != null && day.close < ma10 && volMa5 != null && day.volume > volMa5
+        ? 'defense_break'
+        : null;
+    // 再度走弱：收盘跌破 MA20
+    case 'dragon-return':
+      return ma20 != null && day.close < ma20 ? 'ma_breakdown' : null;
+    // 反弹衰竭：收盘价 < MA3（用户拍板口径）
+    case 'oversold-bounce':
+      return ma3 != null && day.close < ma3 ? 'rebound_fade' : null;
+    // 次日不强即走：收盘价 < 买入价
+    case 'ultra-short':
+      return day.close < buyPrice ? 'weak_close' : null;
+    // 量价背离：收阴且放量，或收盘跌破 MA5 兜底（用户拍板口径）
+    case 'volume-price-up':
+      return (day.close < day.open && volMa5 != null && day.volume > volMa5) ||
+        (ma5 != null && day.close < ma5)
+        ? 'volume_price_divergence'
+        : null;
+    // 隔夜强制清仓（日K近似）：10:00 时点无法判定，按首可卖日收盘离场；
+    // 仅「一字缩量涨停」按 sellRules 允许持有。
+    case 'overnight-hold': {
+      const oneWordLimit =
+        limitPrice != null &&
+        day.open >= limitPrice &&
+        day.open === day.high &&
+        day.high === day.low &&
+        day.low === day.close;
+      return oneWordLimit ? null : 'overnight_exit';
+    }
+    default:
+      return null; // 未启用战法 / 无动态规则，保持原有固定判定
+  }
 }
 
 /**
@@ -447,6 +550,20 @@ export function simulateTrade(
       }
     }
 
+    // 低开未成交（硬性拦截）：次日开盘跌破买入区间下限。
+    // 对要求「高开 1%-3%」的超短线等战法尤其关键——不能因为价格更低就默认捡便宜成交。
+    // 放在两条高开分支之后统一判定，覆盖「正常」与「次新股跳过一字板」两条路径。
+    if (record.buyLow != null && buyDayK.open < record.buyLow) {
+      trade.status = 'invalid';
+      trade.buyDate = buyDate;
+      trade.invalidDate = buyDate;
+      trade.buyPrice = null;
+      trade.sellReason = 'unknown';
+      trade.anomalies = ['low_open_unfilled'];
+      trade.excludedFromStats = true; // 用户拍板：低开未成交排除分母
+      return { trade, tPlus1SellDate: null };
+    }
+
     buyPrice = buyDayK.open;
   }
 
@@ -473,12 +590,17 @@ export function simulateTrade(
   // 买入当日（T日，即 buyDay）是否已有触发标记（用于 T+1 首可卖日、且开盘未跳空时回退 tplus1_*）：
   //  - 止损边：low≤stop
   //  - 目标边：high≥target1 / high≥target2
-  const buyDayStopHit = stop != null && buyDayK.low <= stop;
-  const buyDayT2Hit = target2 != null && buyDayK.high >= target2;
-  const buyDayT1Hit = target1 != null && buyDayK.high >= target1;
+  // 时间倒错修复：t_close 的买入价 = 当日收盘价，买入时点已在收盘，
+  // 当天盘中 low/high 全部发生在买入【之前】，不能当作持仓触发标记去驱动次日 tplus1_*。
+  // t_next_open 的买入价 = 当日开盘价，盘中 low/high 发生在买入之后，标记有效。
+  // 混合时机已在前置降解成 t_close / t_next_open，此处判 buyTiming 即可。
+  const buyDayMarkersApplicable = buyTiming !== 't_close';
+  const buyDayStopHit = buyDayMarkersApplicable && stop != null && buyDayK.low <= stop;
+  const buyDayT2Hit = buyDayMarkersApplicable && target2 != null && buyDayK.high >= target2;
+  const buyDayT1Hit = buyDayMarkersApplicable && target1 != null && buyDayK.high >= target1;
   const buyDayBothSide = buyDayStopHit && (buyDayT1Hit || buyDayT2Hit);
-  // 买入当日收盘已跌破止损（close<stop）：独立于盘中 low/high 的「盘后已知水下」信号
-  const buyDayCloseBelowStop = stop != null && buyDayK.close < stop;
+  // 买入当日收盘已跌破止损（close<stop）：同样只在 t_next_open 下有意义
+  const buyDayCloseBelowStop = buyDayMarkersApplicable && stop != null && buyDayK.close < stop;
 
   let sellDayIdx = -1;
   let sellPrice: number | null = null;
@@ -600,6 +722,19 @@ export function simulateTrade(
       sellDayIdx = i;
       sellPrice = target1;
       sellReason = 'target1';
+      excluded = false;
+      break;
+    }
+
+    // ④½ 收盘确认动态规则（日K尾盘确认制）：
+    //   盘中固定止损/止盈、双边歧义、盘中单边都未触发时，才在收盘判战法专属动态离场。
+    //   触发按当日收盘价成交、excluded=false 正常计入胜率（价格明确，不是歧义）。
+    //   只实现日K(OHLCV)可判定的条件；分时/连板池类条件不进引擎（见 dynamicExitReason 注释）。
+    const dynReason = dynamicExitReason(record.strategyId, dailyK, i, buyPrice, code, isST);
+    if (dynReason) {
+      sellDayIdx = i;
+      sellPrice = day.close;
+      sellReason = dynReason;
       excluded = false;
       break;
     }

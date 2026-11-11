@@ -73,7 +73,7 @@ interface IntradayVolBar {
   color: string;
 }
 
-const MA_COLORS = { ma5: '#f59e0b', ma10: '#3b82f6', ma20: '#a855f7' };
+const MA_COLORS = { ma5: '#f59e0b', ma10: '#3b82f6', ma20: '#a855f7', ma30: '#14b8a6' };
 /** 买卖点标注配色：不与红涨绿跌冲突（需求 7.2） */
 const PLAN_COLORS = {
   buy: '#d4a017',
@@ -271,7 +271,7 @@ export function KlineChart({ rows, intraday: intradayProp, prevClose = null, sho
         kdj: null,
         rsi: null,
         subPath: (_a: (number | null)[]) => '',
-        ma: { ma5: [] as (number | null)[], ma10: [] as (number | null)[], ma20: [] as (number | null)[] },
+        ma: { ma5: [] as (number | null)[], ma10: [] as (number | null)[], ma20: [] as (number | null)[], ma30: [] as (number | null)[] },
         boll: { upper: [] as (number | null)[], mid: [] as (number | null)[], lower: [] as (number | null)[] },
       };
     }
@@ -289,7 +289,7 @@ export function KlineChart({ rows, intraday: intradayProp, prevClose = null, sho
     const ma = calcMA(rows);
     const boll = calcBOLL(rows);
     if (showMa) {
-      for (const key of ['ma5', 'ma10', 'ma20'] as const) {
+      for (const key of ['ma5', 'ma10', 'ma20', 'ma30'] as const) {
         for (const v of ma[key]) if (v != null) { hi = Math.max(hi, v); lo = Math.min(lo, v); }
       }
     }
@@ -361,7 +361,7 @@ export function KlineChart({ rows, intraday: intradayProp, prevClose = null, sho
     };
 
     const maPaths = showMa
-      ? (['ma5', 'ma10', 'ma20'] as const).map((key) => ({ key, d: linePath(ma[key]), color: MA_COLORS[key] }))
+      ? (['ma5', 'ma10', 'ma20', 'ma30'] as const).map((key) => ({ key, d: linePath(ma[key]), color: MA_COLORS[key] }))
       : [];
     const bollPaths = showBoll
       ? [
@@ -606,6 +606,7 @@ export function KlineChart({ rows, intraday: intradayProp, prevClose = null, sho
               <i style={{ background: MA_COLORS.ma5 }} /> MA5
               <i style={{ background: MA_COLORS.ma10 }} /> MA10
               <i style={{ background: MA_COLORS.ma20 }} /> MA20
+              <i style={{ background: MA_COLORS.ma30 }} /> MA30
             </span>
           )}
           {showBoll && <span><i style={{ background: '#64748b' }} /> BOLL(20,2)</span>}
@@ -658,7 +659,7 @@ export function KlineChart({ rows, intraday: intradayProp, prevClose = null, sho
           {hvMa && (
             <span className="muted">
               MA5 {fmtNum(hvMa.ma5[hover!] ?? null)} / MA10 {fmtNum(hvMa.ma10[hover!] ?? null)} / MA20{' '}
-              {fmtNum(hvMa.ma20[hover!] ?? null)}
+              {fmtNum(hvMa.ma20[hover!] ?? null)} / MA30 {fmtNum(hvMa.ma30[hover!] ?? null)}
             </span>
           )}
         </div>

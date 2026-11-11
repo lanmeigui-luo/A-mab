@@ -44,7 +44,8 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
   const [showMa, setShowMa] = useState(true);
   const [showBoll, setShowBoll] = useState(false);
   const [sub, setSub] = useState<SubIndicator>('vol');
-  const [count, setCount] = useState(120);
+  // 默认 60 根：保证 MA30 至少有 31 个可画点（MA30 需 30 根 K 才有第一个值）
+  const [count, setCount] = useState(60);
   const [deepOpen, setDeepOpen] = useState(false);
 
   // 右边缘侧栏宽度（可拖拽左缘伸缩）
@@ -141,7 +142,7 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
           `K线（${period}，${
             isMinute ? 'AkShare 东财分钟线' : fq
           }）：最新 ${last.date} 开${last.open} 高${last.high} 低${last.low} 收${last.close} 量${last.volume}`,
-          `均线：MA5 ${fmtNum(ma.ma5[i])} / MA10 ${fmtNum(ma.ma10[i])} / MA20 ${fmtNum(ma.ma20[i])} / MA60 ${fmtNum(ma.ma60[i])}`,
+          `均线：MA5 ${fmtNum(ma.ma5[i])} / MA10 ${fmtNum(ma.ma10[i])} / MA20 ${fmtNum(ma.ma20[i])} / MA30 ${fmtNum(ma.ma30[i])} / MA60 ${fmtNum(ma.ma60[i])}`,
         );
       }
       if (stats) {

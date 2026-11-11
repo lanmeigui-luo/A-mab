@@ -18,7 +18,9 @@ import {
   tradeInvalidNote,
   tradeViewCategory,
   TRADE_VIEW_STATUS_LABELS,
+  SELL_REASON_LABELS,
 } from '../src/domain/winrate';
+import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
 import type { KlineRow } from '../src/domain/types';
@@ -1359,6 +1361,168 @@ function runHybridBuyTimingAssertion() {
   }
 }
 
+// ───────── 动态买卖规则 / 低开未成交 / 时间倒错修复（本轮新增 P1-P14） ─────────
+function runDynamicRulesAssertion() {
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 12, target2: 13, holdMax: 10 };
+  // 25 根长历史，用于需要 MA20 / MA10 的用例（HIST 只有 12 根，算不出 MA20）
+  const LONG_HIST: KlineRow[] = Array.from({ length: 25 }, (_, i) =>
+    k(`2025-12-${String(i + 1).padStart(2, '0')}`, 10, 10.2, 9.8, 10, 1000),
+  );
+  const mk = (strategyId: string, timing: 't_close' | 't_next_open' | 't_close_or_next_open', p = plan) => {
+    const r = makeRec({ date: '2026-01-01', ...p });
+    r.strategyId = strategyId;
+    r.buyTiming = timing;
+    return r;
+  };
+  const d0 = k('2026-01-01', 10.0, 10.2, 9.9, 10.0);
+  const buyDay = k('2026-01-02', 10.2, 10.4, 10.0, 10.3);
+
+  section('动态规则 P1：t_next_open 低开跌破 buyLow → low_open_unfilled（排除分母）');
+  {
+    const r = mk('test-strategy', 't_next_open');
+    const daily = [...HIST, d0, k('2026-01-02', 9.5, 9.8, 9.4, 9.6), k('2026-01-03', 9.6, 9.8, 9.5, 9.7)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.status === 'invalid', `status=invalid (实际: ${trade.status})`);
+    check(trade.anomalies.includes('low_open_unfilled'), `anomaly 正确 (实际: ${trade.anomalies})`);
+    check(trade.invalidDate === '2026-01-02', `判定日=次日 (实际: ${trade.invalidDate})`);
+    check(trade.excludedFromStats === true, '排除分母标记已置');
+    check(tradeInvalidNote({ ...r, trade }) === '次日低开跌破买入区间，未成交', '未成交文案正确');
+  }
+
+  section('动态规则 P2：t_close 时间倒错修复——买入当日盘中破止损不得驱动次日平仓');
+  {
+    const p = { ...plan, stop: 9.9, holdMax: 3 };
+    const r = mk('test-strategy', 't_close', p);
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10.0, 10.3, 9.5, 10.2), // 盘中 low 9.5 < stop 9.9，但收盘 10.2 在区间内
+      k('2026-01-02', 10.3, 10.5, 10.2, 10.4),
+      k('2026-01-03', 10.4, 10.6, 10.3, 10.5),
+      k('2026-01-04', 10.5, 10.7, 10.4, 10.6),
+    ];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason !== 'tplus1_stop_loss', `不误判 T+1 止损 (实际: ${trade.sellReason})`);
+    check(trade.sellReason === 'hold_expired', `正常持有到到期 (实际: ${trade.sellReason})`);
+  }
+
+  section('动态规则 P3：t_next_open 的买入当日触发标记仍然有效（回归）');
+  {
+    const p = { ...plan, stop: 9.9, holdMax: 10 };
+    const r = mk('test-strategy', 't_next_open', p);
+    const daily = [
+      ...HIST, d0,
+      k('2026-01-02', 10.2, 10.4, 9.5, 10.3), // 开盘买入后盘中 low 9.5 < stop
+      k('2026-01-03', 10.3, 10.5, 10.2, 10.4),
+    ];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason === 'tplus1_stop_loss', `仍按 T+1 开盘平仓 (实际: ${trade.sellReason})`);
+  }
+
+  section('动态规则 P4：断板（日K近似）→ broken_board，按收盘价、计入分母');
+  {
+    const r = mk('first-board', 't_next_open');
+    const daily = [...HIST, d0, buyDay, k('2026-01-03', 10.3, 10.5, 10.2, 10.4)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason === 'broken_board', `sellReason=broken_board (实际: ${trade.sellReason})`);
+    check(trade.sellPrice === 10.4, `按收盘价成交 (实际: ${trade.sellPrice})`);
+    check(trade.status === 'closed' && trade.excludedFromStats !== true, '正常平仓且未排除分母');
+    check(SELL_REASON_LABELS.broken_board.includes('日K近似'), '卖出原因带「日K近似」标签');
+  }
+
+  section('动态规则 P5：反弹衰竭（收盘 < MA3）→ rebound_fade');
+  {
+    const r = mk('oversold-bounce', 't_next_open');
+    const daily = [...HIST, d0, buyDay, k('2026-01-03', 10.3, 10.35, 9.8, 9.9)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason === 'rebound_fade', `sellReason=rebound_fade (实际: ${trade.sellReason})`);
+    check(trade.sellPrice === 9.9, `按收盘价成交 (实际: ${trade.sellPrice})`);
+  }
+
+  section('动态规则 P6：量价背离（收阴且放量 / 破 MA5）→ volume_price_divergence');
+  {
+    const r = mk('volume-price-up', 't_next_open');
+    const daily = [...HIST, d0, buyDay, k('2026-01-03', 10.4, 10.45, 9.9, 10.0, 2000)];
+    const { trade } = simulateTrade(r, daily);
+    check(
+      trade.sellReason === 'volume_price_divergence',
+      `sellReason=volume_price_divergence (实际: ${trade.sellReason})`,
+    );
+  }
+
+  section('动态规则 P7：次日走弱（收盘 < 买入价）→ weak_close');
+  {
+    const r = mk('ultra-short', 't_next_open');
+    const daily = [...HIST, d0, buyDay, k('2026-01-03', 10.3, 10.35, 9.9, 10.0)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason === 'weak_close', `sellReason=weak_close (实际: ${trade.sellReason})`);
+  }
+
+  section('动态规则 P8：跌破 MA20 → ma_breakdown（需长历史）');
+  {
+    const r = mk('trend-break', 't_next_open');
+    const daily = [...LONG_HIST, d0, buyDay, k('2026-01-03', 10.3, 10.35, 9.5, 9.6)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason === 'ma_breakdown', `sellReason=ma_breakdown (实际: ${trade.sellReason})`);
+  }
+
+  section('动态规则 P9：放量跌破 MA10 防守线 → defense_break');
+  {
+    const r = mk('pullback-buy', 't_next_open');
+    const daily = [...LONG_HIST, d0, buyDay, k('2026-01-03', 10.3, 10.35, 9.5, 9.6, 2000)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason === 'defense_break', `sellReason=defense_break (实际: ${trade.sellReason})`);
+  }
+
+  section('动态规则 P10：隔夜强制清仓（日K近似）→ overnight_exit');
+  {
+    const r = mk('overnight-hold', 't_close');
+    const daily = [...HIST, k('2026-01-01', 10.0, 10.3, 9.9, 10.2), k('2026-01-02', 10.3, 10.5, 10.2, 10.4)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason === 'overnight_exit', `sellReason=overnight_exit (实际: ${trade.sellReason})`);
+    check(SELL_REASON_LABELS.overnight_exit.includes('日K近似'), '卖出原因带「日K近似」标签');
+  }
+
+  section('动态规则 P11：优先级——盘中固定止盈先于收盘动态规则');
+  {
+    const r = mk('first-board', 't_next_open', { ...plan, target1: 10.6 });
+    const daily = [...HIST, d0, buyDay, k('2026-01-03', 10.3, 11.0, 10.2, 10.9)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason === 'target1', `固定止盈优先 (实际: ${trade.sellReason})`);
+  }
+
+  section('动态规则 P12：混合时机顺延路径同样拦截低开');
+  {
+    const r = mk('test-strategy', 't_close_or_next_open');
+    const daily = [...HIST, k('2026-01-01', 10.0, 11.0, 9.9, 10.9), k('2026-01-02', 9.5, 9.8, 9.4, 9.6)];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.anomalies.includes('low_open_unfilled'), `顺延后低开被拦截 (实际: ${trade.anomalies})`);
+  }
+
+  section('动态规则 P13：MA30 指标可算（UI 默认 60 根保证 31 个可画点）');
+  {
+    const rows = Array.from({ length: 35 }, (_, i) => k(`2026-01-${String(i + 1).padStart(2, '0')}`, 10, 10, 10, 10));
+    const ma = calcMA(rows);
+    check(ma.ma30[28] == null, 'MA30 第 29 根仍为 null（历史不足）');
+    check(ma.ma30[29] != null, 'MA30 第 30 根有值');
+    check(ma.ma30[34] === 10, `MA30 末值正确 (实际: ${ma.ma30[34]})`);
+  }
+
+  section('动态规则 P14：未启用/未知战法不触发动态规则（零回归保障）');
+  {
+    const r = mk('test-strategy', 't_next_open', { ...plan, holdMax: 2 });
+    // 给足 2 根可卖日 K，让 holdMax=2 的到期路径能走完
+    const daily = [
+      ...HIST, d0, buyDay,
+      k('2026-01-03', 10.3, 10.5, 10.2, 10.4),
+      k('2026-01-04', 10.4, 10.6, 10.3, 10.5),
+    ];
+    const { trade } = simulateTrade(r, daily);
+    check(trade.sellReason !== 'broken_board' && trade.sellReason !== 'weak_close', '未知战法走原有固定判定');
+    check(trade.sellReason === 'hold_expired', `按原有到期规则平仓 (实际: ${trade.sellReason})`);
+    check(trade.status === 'closed', `正常平仓 (实际: ${trade.status})`);
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1372,6 +1536,7 @@ async function main() {
   runExecutionRateAssertion();
   runInvalidDateAssertion();
   runHybridBuyTimingAssertion();
+  runDynamicRulesAssertion();
   await runMinuteAssertions();
   runMinuteStatsAssertion();
 
