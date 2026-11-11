@@ -3,12 +3,19 @@ import type { KlineRow, MinuteRow } from '@/domain/types';
 import type { StrategyHit, TradePlan } from '@/domain/strategy';
 import { changeColor, formatPct, formatChange } from '@/lib/market-colors';
 import { calcMA, calcBOLL, calcMACD, calcKDJ, calcRSI, rangeStats } from '@/lib/indicators';
+import type { MaSeries } from '@/lib/indicators';
 import { fmtNum, fmtVolume } from '@/lib/format';
 
 export type SubIndicator = 'vol' | 'macd' | 'kdj' | 'rsi';
 
 interface Props {
   rows: KlineRow[];
+  /**
+   * 预先算好的均线（长度须与 rows 一致）。用于「只渲染最后 N 根 K 线、但均线基于更长历史计算」
+   * 的场景（如个股详情默认显示 30 根、实际取 60 根算 MA30）。
+   * 不传时组件内部按 rows 自行 calcMA，保持其它调用方（如交易详情弹窗）原有行为。
+   */
+  precomputedMa?: MaSeries | null;
   /** 分时数据（MinuteRow[]）；若提供且非空，进入分时渲染模式，忽略 rows */
   intraday?: MinuteRow[] | null;
   /** 分时昨收参考线（元）；为 null 时省略昨收线 */
@@ -83,7 +90,7 @@ const PLAN_COLORS = {
 /** 分时均价线配色 */
 const AVG_COLOR = '#f59e0b';
 
-export function KlineChart({ rows, intraday: intradayProp, prevClose = null, showMa = true, showBoll = false, sub = 'vol', plan = null, signals = [] }: Props) {
+export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp, prevClose = null, showMa = true, showBoll = false, sub = 'vol', plan = null, signals = [] }: Props) {
   const [hover, setHover] = useState<number | null>(null);
   const [sigOpen, setSigOpen] = useState(false);
   const intraday = useMemo(() => (intradayProp && intradayProp.length ? intradayProp : null), [intradayProp]);
@@ -286,7 +293,7 @@ export function KlineChart({ rows, intraday: intradayProp, prevClose = null, sho
     const lows = rows.map((r) => r.low);
     let hi = Math.max(...highs);
     let lo = Math.min(...lows);
-    const ma = calcMA(rows);
+    const ma = precomputedMa ?? calcMA(rows);
     const boll = calcBOLL(rows);
     if (showMa) {
       for (const key of ['ma5', 'ma10', 'ma20', 'ma30'] as const) {
@@ -432,7 +439,7 @@ export function KlineChart({ rows, intraday: intradayProp, prevClose = null, sho
       volBars: [] as IntradayVolBar[],
       intradayHead: null,
     };
-  }, [rows, intraday, sub, plan, prevClose, showMa, showBoll]);
+  }, [rows, precomputedMa, intraday, sub, plan, prevClose, showMa, showBoll]);
 
   if (!view) return <div className="empty">暂无 {intraday ? '分时' : 'K 线'}数据</div>;
 

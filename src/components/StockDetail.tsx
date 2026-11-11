@@ -44,8 +44,8 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
   const [showMa, setShowMa] = useState(true);
   const [showBoll, setShowBoll] = useState(false);
   const [sub, setSub] = useState<SubIndicator>('vol');
-  // 默认 60 根：保证 MA30 至少有 31 个可画点（MA30 需 30 根 K 才有第一个值）
-  const [count, setCount] = useState(60);
+  // 默认显示 30 根（视图更聚焦）；选项含 30。请求与均线计算见下方 fetchCount / precomputedMa。
+  const [count, setCount] = useState(30);
   const [deepOpen, setDeepOpen] = useState(false);
 
   // 右边缘侧栏宽度（可拖拽左缘伸缩）
@@ -84,15 +84,36 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
     isIntraday,
   );
 
+  // MA30 需要至少 30 根 K 才有第一个值：若只请求 30 根，MA30 曲线几乎全空。
+  // 因此选择 30 时实际请求 60 根（其余档位按原值），用完整数据算好均线后再截取最后 count 个点。
+  const fetchCount = count <= 30 ? 60 : count;
+
   const kline = usePolling<KlineResponse>(
     () =>
       isMinute
         ? marketApi.klineMin(fullCode.slice(2), period.slice(1), fq, 320)
-        : marketApi.kline(fullCode, period, fq, count),
+        : marketApi.kline(fullCode, period, fq, fetchCount),
     isMinute ? 60000 : 30000,
     [fullCode, period, fq, count],
     !isIntraday,
   );
+
+  const klineDataRows = kline.data?.rows;
+  /** 图表只渲染最后 count 根，视野聚焦 */
+  const visibleRows = useMemo(() => (klineDataRows ?? []).slice(-count), [klineDataRows, count]);
+  /** 均线基于完整取数计算，再截最后 count 个点；避免 MA30 因样本不足而画不出来 */
+  const precomputedMa = useMemo(() => {
+    if (!klineDataRows?.length) return null;
+    const full = calcMA(klineDataRows);
+    const tail = (a: (number | null)[]) => a.slice(-count);
+    return {
+      ma5: tail(full.ma5),
+      ma10: tail(full.ma10),
+      ma20: tail(full.ma20),
+      ma30: tail(full.ma30),
+      ma60: tail(full.ma60),
+    };
+  }, [klineDataRows, count]);
 
   // 当前周期实际使用的取数通道（分时→minute，其余→kline）
   const active = isIntraday ? minute : kline;
@@ -132,9 +153,10 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
         );
       }
     } else {
-      const rows = kline.data?.rows ?? [];
+      const rows = klineDataRows ?? [];
+      // 均线用完整取数算（保证 MA30 有值），区间统计对应用户实际看到的可见窗口
       const ma = rows.length ? calcMA(rows) : null;
-      const stats = rows.length ? rangeStats(rows) : null;
+      const stats = visibleRows.length ? rangeStats(visibleRows) : null;
       const last = rows[rows.length - 1];
       if (last && ma) {
         const i = rows.length - 1;
@@ -154,7 +176,7 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
 
     lines.push('事件与公告：数据缺失（本页未接入公告通道，不得推测）');
     return lines.join('\n');
-  }, [quote, name, fullCode, minute.data, kline.data, period, fq, isIntraday, isMinute]);
+  }, [quote, name, fullCode, minute.data, kline.data, period, fq, isIntraday, isMinute, visibleRows]);
 
   const color = changeColor(quote?.changePct ?? null);
 
@@ -274,7 +296,7 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
 
           {!isIntraday && (
             <div className="seg">
-              {[60, 120, 250].map((c) => (
+              {[30, 60, 120, 250].map((c) => (
                 <button key={c} className={`seg-btn ${count === c ? 'on' : ''}`} onClick={() => setCount(c)}>
                   {c}
                 </button>
@@ -302,7 +324,8 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
           <div className="empty">{isIntraday ? '今日暂无分时数据' : '暂无该周期 K 线数据'}</div>
         ) : (
           <KlineChart
-            rows={isIntraday ? [] : (kline.data?.rows ?? [])}
+            rows={isIntraday ? [] : visibleRows}
+            precomputedMa={isIntraday ? null : precomputedMa}
             intraday={isIntraday ? (minute.data?.rows ?? []) : null}
             prevClose={quote?.prevClose}
             showMa={showMa}
