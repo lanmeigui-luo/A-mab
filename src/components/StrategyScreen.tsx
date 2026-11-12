@@ -23,6 +23,11 @@ interface Props {
   onToggle: (id: string) => void;
   poolSize: number;
   onPoolSize: (n: number) => void;
+  /** 全市场深度扫描（scan=full）：默认关闭，开启后前端显示长耗时提示 */
+  fullScan: boolean;
+  onFullScan: (v: boolean) => void;
+  /** 当前选股已耗时（秒），用于长时间扫描时展示进度 */
+  elapsedSec: number;
   onRun: () => void;
   watchCodes: string[];
   onRunWithWatch: () => void;
@@ -226,6 +231,9 @@ export function StrategyScreen({
   onToggle,
   poolSize,
   onPoolSize,
+  fullScan,
+  onFullScan,
+  elapsedSec,
   onRun,
   watchCodes,
   onRunWithWatch,
@@ -326,10 +334,42 @@ export function StrategyScreen({
             <option value={5000}>5000</option>
           </select>
         </label>
+        <label className="check" title="扫描全市场 5000+ 股票，消除涨幅 TopN 截断偏差；耗时约 1-2 分钟">
+          <input
+            type="checkbox"
+            checked={fullScan}
+            onChange={(e) => onFullScan(e.target.checked)}
+            disabled={loading}
+          />
+          全市场深度扫描
+        </label>
         <button className="btn primary" onClick={onRun} disabled={loading || !selected.length}>
           {loading ? '执行中…' : '执行选股'}
         </button>
       </header>
+
+      {loading && (
+        <div className="alert info">
+          {fullScan ? (
+            <>
+              <strong>正在扫描全市场 5000+ 股票，预计耗时 1-2 分钟，请稍候...</strong>
+              <div className="muted" style={{ marginTop: 4 }}>
+                全市场快照 → 快照硬门槛预筛 → 逐票 K 线精算；首次扫描或缓存过期时较慢。
+                已耗时 {elapsedSec}s，请勿关闭页面或重复点击。
+              </div>
+            </>
+          ) : (
+            <>
+              正在执行选股… 已耗时 {elapsedSec}s
+              {elapsedSec >= 15 && (
+                <span className="muted">
+                  {' '}· 候选池较大时精算会变慢；如需全市场无死角扫描，可勾选「全市场深度扫描」
+                </span>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {groups.map((g) => (
         <div className="strategy-group" key={g.category}>

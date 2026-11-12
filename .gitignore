@@ -55,6 +55,9 @@ logs/
 sidecar_run.err
 sidecar_run.out
 
+# sidecar 运行时动态刷新的行业映射数据（服务进程持续重写，不进版本库）
+sidecar/board_map.json
+
 # 本地探测 / 验证脚本与产物（非应用一部分，不进仓库）
 __asar_list.txt
 __investigate.cjs

@@ -85,6 +85,10 @@ export default function App() {
   const [screen, setScreen] = useState<ScreenResponse | null>(null);
   const [screenErr, setScreenErr] = useState<string | null>(null);
   const [screening, setScreening] = useState(false);
+  // 全市场深度扫描（scan=full）：默认关闭，保持原有 TopN 快路径；开启后走全市场快照 + 预筛
+  const [fullScan, setFullScan] = useState(false);
+  const [screenStartedAt, setScreenStartedAt] = useState<number | null>(null);
+  const [screenElapsedSec, setScreenElapsedSec] = useState(0);
 
   useEffect(() => {
     marketApi
@@ -96,6 +100,8 @@ export default function App() {
   const runScreen = async (useWatchAsPool = false) => {
     setScreening(true);
     setScreenErr(null);
+    setScreenStartedAt(Date.now());
+    setScreenElapsedSec(0);
     try {
       const r = await marketApi.screen({
         sortBy: 'changePct',
@@ -103,14 +109,26 @@ export default function App() {
         ids: selected,
         codes: useWatchAsPool ? wl.fullCodes : undefined,
         params: sp.params,
+        // 默认不传（=topN 快路径）；仅当用户勾选「全市场深度扫描」时才走 scan=full
+        scan: fullScan ? 'full' : undefined,
       });
       setScreen(r);
     } catch (e) {
       setScreenErr(String((e as Error).message || e));
     } finally {
       setScreening(false);
+      setScreenStartedAt(null);
     }
   };
+
+  // 选股进行中每秒刷新已耗时：长时间扫描时明确告知进度，避免被误认为卡死
+  useEffect(() => {
+    if (!screening || screenStartedAt == null) return;
+    const tick = () => setScreenElapsedSec(Math.floor((Date.now() - screenStartedAt) / 1000));
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [screening, screenStartedAt]);
 
   // 板块行情：切换类型时重新拉取
   const [boardType, setBoardType] = useState<BoardType>('industry');
@@ -195,6 +213,9 @@ export default function App() {
             onToggle={toggleStrategy}
             poolSize={poolSize}
             onPoolSize={setPoolSize}
+            fullScan={fullScan}
+            onFullScan={setFullScan}
+            elapsedSec={screenElapsedSec}
             onRun={() => runScreen(false)}
             watchCodes={wl.fullCodes}
             onRunWithWatch={() => runScreen(true)}
