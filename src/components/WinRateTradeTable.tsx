@@ -56,8 +56,18 @@ function signalDate(r: WinRateRecord): string | null {
   return r.date;
 }
 
-/** 已记录行的买入计划文案（按买入时机） */
-function buyTimingPlanLabel(t: WinRateRecord['buyTiming']): string {
+/**
+ * 已记录行的买入计划文案（按买入风格 + 买入时机）。
+ * entryStyle 是 buyTiming 的补充维度（互补不取代）：有 entryStyle 的新记录展示盘中实时口径，
+ * 老记录（无 entryStyle）回退原有 buyTiming 文案，零回归。
+ */
+function buyTimingPlanLabel(
+  t: WinRateRecord['buyTiming'],
+  style: WinRateRecord['entryStyle'],
+): string {
+  if (style === 'instant') return '9:30 开盘价判定买入（高开 / 一字板 / 低开则未成交）';
+  if (style === 'intraday_limit') return '盘中价格进入买入区间即买入（14:50 未触发交日K复核）';
+  if (style === 'daily_only') return '记录日尾盘买入（仅日K结算）';
   if (t === 't_close') return '记录日尾盘买入（收盘价待定）';
   if (t === 't_close_or_next_open') return '记录日收盘优先，买不到顺延次日';
   return '次日开盘买入';
@@ -221,17 +231,27 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                         const invalid = tradeInvalidNote(r);
                         const defer = deferredNote(r);
                         if (invalid) return invalid + defer;
-                        if (category === 'recorded') return buyTimingPlanLabel(r.buyTiming);
+                        if (category === 'recorded') return buyTimingPlanLabel(r.buyTiming, r.entryStyle);
                         return tradeRuleNote(r) + defer;
                       })()}
                     </td>
                     <td>
                       <span className={`wr-status wr-status-${category}`}>
-                        {TRADE_VIEW_STATUS_LABELS[category]}
+                        {/* 盘中 14:50 未成交为软标记（status 仍 open，晚间日K兜底可翻案），
+                            此处单独展示「未成交（待复核）」让状态流转可见；不改 tradeViewCategory 分类口径 */}
+                        {r.trade.intradayEntryResolved === 'unfilled'
+                          ? '未成交（待复核）'
+                          : TRADE_VIEW_STATUS_LABELS[category]}
                       </span>
                     </td>
                     <td className="wr-anom">{anomalies || '—'}</td>
                     <td className="wr-tags">
+                      {r.trade.monitorBought && <span className="chip">盘中买入</span>}
+                      {r.trade.monitorClosed && <span className="chip">盘中平仓</span>}
+                      {r.trade.intradayEntryResolved === 'unfilled' && (
+                        <span className="chip warn">盘中未成交·待复核</span>
+                      )}
+                      {r.trade.entrySource === 'daily_k' && <span className="chip muted">日K兜底</span>}
                       {r.trade.excludedFromStats && <span className="chip warn">已排除分母</span>}
                       {r.trade.sellReason === 'ambiguous_intraday' && (
                         <span className="chip muted">歧义</span>

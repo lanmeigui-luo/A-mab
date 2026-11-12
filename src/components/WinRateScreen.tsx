@@ -133,6 +133,11 @@ function WinRateScreenInner({
   const hasData = records.length > 0;
   const hasFiltered = filteredRecords.length > 0;
   const openCount = records.filter((r) => r.trade.status === 'open').length;
+  // 盘中实时买入引擎：把 open 拆成「待买入 / 持仓中」，让状态流转在 banner 上可见
+  const pendingBuyCount = records.filter(
+    (r) => r.trade.status === 'open' && r.trade.buyPrice == null,
+  ).length;
+  const holdingCount = openCount - pendingBuyCount;
 
   return (
     <div className="wr-screen">
@@ -163,7 +168,14 @@ function WinRateScreenInner({
               display: 'inline-block',
             }}
           />
-          盘中实时监控中{openCount > 0 ? `（监控 ${openCount} 笔持仓）` : ''}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span>
+              盘中实时监控中（持仓 {holdingCount} 笔 · 待买入 {pendingBuyCount} 笔）
+            </span>
+            <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.85 }}>
+              9:30 起按战法规则盘中触发买入；14:50 仍未触发的记录交晚间日K兜底复核，绝不漏票。卖出严格 T+1。
+            </span>
+          </div>
         </div>
       )}
       {/* 顶部筛选区 + 统计口径说明 */}

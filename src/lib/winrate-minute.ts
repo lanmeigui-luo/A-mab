@@ -26,7 +26,7 @@
  * ───────────────────────────────────────────────────────────────────────
  */
 
-import type { WinRateRecord, TradeRecord, SellReason, MinuteResolveMeta } from '../domain/winrate';
+import type { WinRateRecord, TradeRecord, SellReason, MinuteResolveMeta, EntryStyle } from '../domain/winrate';
 import type { KlineRow } from '../domain/types';
 import { TRADE_RULE_VERSION } from '../domain/winrate-config';
 
@@ -112,6 +112,119 @@ export function periodFallbackChain(daysBetween: number): (1 | 5 | 15)[] {
 /** 从一坨分钟 bars 中切片出候选日（date 以 candidateDay 开头） */
 export function sliceDayBars(bars: MinuteBar[], candidateDay: string): MinuteBar[] {
   return bars.filter((b) => b.date === candidateDay || b.date.startsWith(candidateDay + ' ') || b.date.startsWith(candidateDay + 'T'));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 盘中实时买入引擎 · 共享纯函数层
+// 盘中监控（1min bars）与晚间日K兜底（单根日K）【复用同一套区间语义】，
+// 避免两条链路给出不一致的买入结论（用户拍板决策点 3「兜底判定必须复用相同 entryStyle 逻辑」）。
+// ════════════════════════════════════════════════════════════════════════════
+
+/** 买入计划（只用区间，止损 / 目标属于卖出端） */
+export interface EntryPlan {
+  buyLow: number | null;
+  buyHigh: number | null;
+  /** 当日涨停价（instant 一字板判定用）；缺失按「不拦截」，由日K兜底处理 */
+  limitUpPrice?: number | null;
+}
+
+/** 盘中买入判定结果 */
+export type EntryDecision =
+  | { kind: 'bought'; buyPrice: number; barDate: string }
+  /** instant 9:30 一次性判定为未成交（高开超限 / 一字板 / 低开） */
+  | { kind: 'unfilled' }
+  /** 尚未触发 / 不适用 / 无计划：保持「待买入」，继续监控或交日K兜底 */
+  | { kind: 'skip' };
+
+/**
+ * 价格区间 [low, high] 是否与买入区间 [buyLow, buyHigh] 有交集。
+ * 字段缺失一律按「无界」放行（沿用领域约定：缺失不拦截、不用 0 冒充行情）。
+ * 这是「绝对不漏票」的核心判据：只要当日曾有一刻价格落入区间，即认为可买。
+ */
+export function buyRangeOverlap(
+  low: number,
+  high: number,
+  buyLow: number | null,
+  buyHigh: number | null,
+): boolean {
+  if (!(low <= high)) return false;
+  if (buyHigh != null && low > buyHigh) return false; // 全天最低都高于买高
+  if (buyLow != null && high < buyLow) return false; // 全天最高都低于买低
+  return true;
+}
+
+/** 把成交价 clamp 进买入区间（开盘价在区间内直接用开盘价，否则取最近边界） */
+export function clampToBuyRange(price: number, buyLow: number | null, buyHigh: number | null): number {
+  let p = price;
+  if (buyLow != null && p < buyLow) p = buyLow;
+  if (buyHigh != null && p > buyHigh) p = buyHigh;
+  return p;
+}
+
+/**
+ * 盘中买入主判定（纯函数，供 useIntradayMonitor 与离线验收共用）。
+ * 调用方必须先按【同一交易日】切片（sliceDayBars）并按时间升序传入，避免缺口回填串日。
+ *  - daily_only（含老记录缺省）→ skip：完全不参与盘中买入，只交日K结算。
+ *  - instant → 只看第一根 bar（9:30）的 open：一字板 / 高开超限 / 低开 → unfilled，否则买入。
+ *  - intraday_limit → 找第一根「价格区间与买入区间有交集」的 bar，落入即买（clamp 成交价）。
+ * 无买入计划（buyLow 与 buyHigh 同为 null，如涨停票）→ skip，交日K兜底，绝不误买。
+ */
+export function evaluateIntradayEntry(
+  bars: MinuteBar[],
+  plan: EntryPlan,
+  entryStyle: EntryStyle | null | undefined,
+): EntryDecision {
+  const style = entryStyle ?? 'daily_only';
+  if (style === 'daily_only' || bars.length === 0) return { kind: 'skip' };
+  if (plan.buyLow == null && plan.buyHigh == null) return { kind: 'skip' };
+
+  if (style === 'instant') {
+    const first = bars[0];
+    const oneWordLimit =
+      plan.limitUpPrice != null &&
+      first.open >= plan.limitUpPrice &&
+      first.open === first.high &&
+      first.high === first.low &&
+      first.low === first.close;
+    if (oneWordLimit) return { kind: 'unfilled' }; // 一字涨停无卖盘，买不进
+    if (plan.buyHigh != null && first.open > plan.buyHigh) return { kind: 'unfilled' }; // 高开超限
+    if (plan.buyLow != null && first.open < plan.buyLow) return { kind: 'unfilled' }; // 低开跌破区间
+    return { kind: 'bought', buyPrice: first.open, barDate: first.date };
+  }
+
+  // intraday_limit：逐分钟找首个进入买入区间的 bar
+  for (const b of bars) {
+    const low = Math.min(b.open, b.close, b.low);
+    const high = Math.max(b.open, b.close, b.high);
+    if (!buyRangeOverlap(low, high, plan.buyLow, plan.buyHigh)) continue;
+    return {
+      kind: 'bought',
+      buyPrice: clampToBuyRange(b.open, plan.buyLow, plan.buyHigh),
+      barDate: b.date,
+    };
+  }
+  return { kind: 'skip' };
+}
+
+/**
+ * 日K兜底买入复核（与 evaluateIntradayEntry 共享 buyRangeOverlap / clampToBuyRange，口径唯一）。
+ * 仅对「盘中 14:50 判未成交（软标记）+ entryStyle=intraday_limit」的记录启用：
+ * 用当日日K的 low/high 复核是否曾进入买入区间；进过 → 判定买入（翻案，保证「绝对不漏票」）。
+ * 返回 null = 未进入（保持原未成交判定，交 simulateTrade 原逻辑处理）。
+ * instant / daily_only 不走此处：instant 按开盘价判定（9:30 与日K开盘口径一致，无需翻案），
+ * daily_only 尾盘买入本就不参与盘中监控。
+ */
+export function evaluateDailyEntryFallback(
+  dayK: { open: number; high: number; low: number; close: number },
+  plan: EntryPlan,
+  entryStyle: EntryStyle | null | undefined,
+): { buyPrice: number } | null {
+  if ((entryStyle ?? 'daily_only') !== 'intraday_limit') return null;
+  if (plan.buyLow == null && plan.buyHigh == null) return null;
+  const low = Math.min(dayK.open, dayK.close, dayK.low);
+  const high = Math.max(dayK.open, dayK.close, dayK.high);
+  if (!buyRangeOverlap(low, high, plan.buyLow, plan.buyHigh)) return null;
+  return { buyPrice: clampToBuyRange(dayK.open, plan.buyLow, plan.buyHigh) };
 }
 
 export interface DisambiguateInput {

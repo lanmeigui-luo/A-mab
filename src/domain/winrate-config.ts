@@ -9,7 +9,7 @@
  * ⚠️ 本清单为「手工同步自 server/strategies/index.mjs」，后端增删战法需同步此处。
  */
 
-import type { BuyTiming } from './winrate';
+import type { BuyTiming, EntryStyle } from './winrate';
 
 export interface HoldDays {
   min: number;
@@ -29,6 +29,11 @@ export interface StrategyWinRateConfig {
   paramVersion: string;
   /** 买入时机：t_close=记录日收盘买入；t_next_open=记录日次日开盘（默认） */
   buyTiming: BuyTiming;
+  /**
+   * 盘中买入风格（与 buyTiming 互补、不取代）：盘中实时买入引擎据此决定是否 / 如何盘中触发。
+   * 详见 winrate.ts 的 EntryStyle 注释。历史旧 WinRateRecord 无此字段时按 daily_only 处理。
+   */
+  entryStyle: EntryStyle;
   /** 是否可用于胜率统计（false = 数据源未接入，不产生信号） */
   enabled: boolean;
 }
@@ -76,23 +81,34 @@ interface RawDef {
   holding: string;
   available: boolean;
   buyTiming: BuyTiming;
+  entryStyle: EntryStyle;
   ruleNote: string;
 }
 
-/** 已核对的后端 STRATEGY_DEFS 子集（id / name / holding / available / 规则说明） */
+/**
+ * 已核对的后端 STRATEGY_DEFS 子集（id / name / holding / available / 规则说明）
+ *
+ * entryStyle 映射依据（用户拍板，与 buyTiming 互补、不取代）：
+ *  - instant（打板 / 开盘判定类）：首板打板、连板晋级、龙头战法、超短线战法
+ *    → 买入日 9:30 第一分钟按开盘价一次性判定，高开超限 / 一字板 / 低开即未成交。
+ *  - intraday_limit（低吸 / 趋势类）：趋势突破、均线多头、低吸回踩、龙回头、超跌反弹、量价齐升
+ *    → 买入日盘中每分钟检查价格是否进入 [buyLow,buyHigh]，落入即买；14:50 未触发交日K兜底翻案。
+ *  - daily_only（尾盘买入口径）：隔夜持股法（决策点 1，次日开盘绝不参与盘中监控）、
+ *    事件驱动（未接入，不产生信号）→ 完全交给日K结算。
+ */
 const RAW_DEFS: RawDef[] = [
-  { id: 'first-board', name: '首板打板', holding: '次日', available: true, buyTiming: 't_close_or_next_open', ruleNote: '记录日收盘优先、封板或超区间顺延次日；次日冲高或封板走弱即离场，持股 ≤1 个交易日' },
-  { id: 'board-advance', name: '连板晋级', holding: '次日', available: true, buyTiming: 't_next_open', ruleNote: '次日换手晋级失败即离场，持股 ≤1 个交易日' },
-  { id: 'trend-break', name: '趋势突破', holding: '5-20 天', available: true, buyTiming: 't_next_open', ruleNote: '突破后沿趋势持有 5-20 个交易日，跌破关键支撑离场' },
-  { id: 'ma-bull', name: '均线多头', holding: '10-30 天', available: true, buyTiming: 't_next_open', ruleNote: '均线多头排列中持有 10-30 个交易日，均线走坏离场' },
-  { id: 'dragon', name: '龙头战法', holding: '1-5 天', available: true, buyTiming: 't_close_or_next_open', ruleNote: '记录日收盘优先、封板或超区间顺延次日；龙头主升持有 1-5 个交易日，断板即走' },
-  { id: 'pullback-buy', name: '低吸回踩', holding: '3-10 天', available: true, buyTiming: 't_close_or_next_open', ruleNote: '记录日收盘优先、未进伏击圈顺延次日；回踩确认后持有 3-10 个交易日，放量跌破防守线离场' },
-  { id: 'dragon-return', name: '龙回头', holding: '3-10 天', available: true, buyTiming: 't_next_open', ruleNote: '反攻确认后持有 3-10 个交易日，再度走弱离场' },
-  { id: 'oversold-bounce', name: '超跌反弹', holding: '3-10 天', available: true, buyTiming: 't_next_open', ruleNote: '反弹确认后持有 3-10 个交易日，反弹衰竭离场' },
-  { id: 'ultra-short', name: '超短线战法', holding: '1-3 天', available: true, buyTiming: 't_next_open', ruleNote: '持股 1-3 个交易日，次日不强即走' },
-  { id: 'volume-price-up', name: '量价齐升', holding: '3-15 天', available: true, buyTiming: 't_next_open', ruleNote: '量价配合持有 3-15 个交易日，量价背离离场' },
-  { id: 'overnight-hold', name: '隔夜持股法', holding: '1 天', available: true, buyTiming: 't_close', ruleNote: '尾盘买入、次日 10:00 前强制卖出，持仓仅 1 个交易日' },
-  { id: 'event', name: '事件驱动', holding: '—', available: false, buyTiming: 't_next_open', ruleNote: '数据源未接入，不产生信号（holding=—）' },
+  { id: 'first-board', name: '首板打板', holding: '次日', available: true, buyTiming: 't_close_or_next_open', entryStyle: 'instant', ruleNote: '记录日收盘优先、封板或超区间顺延次日；次日冲高或封板走弱即离场，持股 ≤1 个交易日' },
+  { id: 'board-advance', name: '连板晋级', holding: '次日', available: true, buyTiming: 't_next_open', entryStyle: 'instant', ruleNote: '次日换手晋级失败即离场，持股 ≤1 个交易日' },
+  { id: 'trend-break', name: '趋势突破', holding: '5-20 天', available: true, buyTiming: 't_next_open', entryStyle: 'intraday_limit', ruleNote: '突破后沿趋势持有 5-20 个交易日，跌破关键支撑离场' },
+  { id: 'ma-bull', name: '均线多头', holding: '10-30 天', available: true, buyTiming: 't_next_open', entryStyle: 'intraday_limit', ruleNote: '均线多头排列中持有 10-30 个交易日，均线走坏离场' },
+  { id: 'dragon', name: '龙头战法', holding: '1-5 天', available: true, buyTiming: 't_close_or_next_open', entryStyle: 'instant', ruleNote: '记录日收盘优先、封板或超区间顺延次日；龙头主升持有 1-5 个交易日，断板即走' },
+  { id: 'pullback-buy', name: '低吸回踩', holding: '3-10 天', available: true, buyTiming: 't_close_or_next_open', entryStyle: 'intraday_limit', ruleNote: '记录日收盘优先、未进伏击圈顺延次日；回踩确认后持有 3-10 个交易日，放量跌破防守线离场' },
+  { id: 'dragon-return', name: '龙回头', holding: '3-10 天', available: true, buyTiming: 't_next_open', entryStyle: 'intraday_limit', ruleNote: '反攻确认后持有 3-10 个交易日，再度走弱离场' },
+  { id: 'oversold-bounce', name: '超跌反弹', holding: '3-10 天', available: true, buyTiming: 't_next_open', entryStyle: 'intraday_limit', ruleNote: '反弹确认后持有 3-10 个交易日，反弹衰竭离场' },
+  { id: 'ultra-short', name: '超短线战法', holding: '1-3 天', available: true, buyTiming: 't_next_open', entryStyle: 'instant', ruleNote: '持股 1-3 个交易日，次日不强即走' },
+  { id: 'volume-price-up', name: '量价齐升', holding: '3-15 天', available: true, buyTiming: 't_next_open', entryStyle: 'intraday_limit', ruleNote: '量价配合持有 3-15 个交易日，量价背离离场' },
+  { id: 'overnight-hold', name: '隔夜持股法', holding: '1 天', available: true, buyTiming: 't_close', entryStyle: 'daily_only', ruleNote: '尾盘买入、次日 10:00 前强制卖出，持仓仅 1 个交易日' },
+  { id: 'event', name: '事件驱动', holding: '—', available: false, buyTiming: 't_next_open', entryStyle: 'daily_only', ruleNote: '数据源未接入，不产生信号（holding=—）' },
 ];
 
 /** 战法 → 胜率配置映射表（P1 落地全量，由 STRATEGY_DEFS 核对） */
@@ -105,6 +121,7 @@ export const WINRATE_STRATEGY_CONFIG: Record<string, StrategyWinRateConfig> = Ob
       holdDays: parseHoldDays(d.holding),
       holdingRaw: d.holding,
       buyTiming: d.buyTiming,
+      entryStyle: d.entryStyle,
       ruleNote: d.ruleNote,
       paramVersion: STRATEGY_PARAM_VERSION,
       enabled: d.available,

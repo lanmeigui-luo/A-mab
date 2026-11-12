@@ -32,6 +32,24 @@ export type TradeStatus =
 export type BuyTiming = 't_close' | 't_next_open' | 't_close_or_next_open';
 
 /**
+ * 盘中买入风格（与 buyTiming 互补，不取代）——「盘中实时买入引擎」引入。
+ *  - instant：打板类，买入日 9:30 第一分钟按开盘价一次性判定（高开超限 / 一字板 / 低开 → 未成交）。
+ *  - intraday_limit：低吸 / 趋势类，买入日盘中每分钟检查价格是否进入 [buyLow, buyHigh]，
+ *    只要有一分钟落入区间即模拟买入；14:50 仍未触发则打软标记，交晚间日K兜底翻案。
+ *  - daily_only：尾盘买入类（隔夜持股法），买入发生在记录日尾盘，次日开盘绝不参与盘中监控，
+ *    只交给日K结算，避免用 9:30 开盘价冒充尾盘成交价。
+ * 缺省（老记录无此字段）一律按 daily_only 处理：不参与盘中买入，保持历史口径零回归。
+ */
+export type EntryStyle = 'instant' | 'intraday_limit' | 'daily_only';
+
+/** 买入风格中文文案（UI 唯一出处） */
+export const ENTRY_STYLE_LABELS: Record<EntryStyle, string> = {
+  instant: '9:30 开盘判定',
+  intraday_limit: '盘中回踩进区间',
+  daily_only: '尾盘买入（仅日K结算）',
+};
+
+/**
  * 卖出原因。
  * 时间语义（v2-t1-fix 起唯一口径）：A 股 T+1，买入后首个可交易日才能卖；
  * 每根可卖日 K 线按「先判开盘跳空(时间最早) → 再判盘中(双边歧义/单边) → 最后到期」的优先级，
@@ -315,6 +333,23 @@ export interface TradeRecord {
    * 透明度标记：详情页据此显示「盘中实时监控平仓」，与日K结算平仓区分；不改变已平仓本质。
    */
   monitorClosed?: boolean;
+  /**
+   * 是否由「盘中实时监控」触发买入（防重 + 透明度）。
+   * 置 true 后，晚间日K结算（simulateTrade）锁定该买入价、跳过买入重算，
+   * 保证不会二次买入或覆盖盘中真实触发价（用户拍板的防重标记）。
+   */
+  monitorBought?: boolean;
+  /** 买入来源：intraday=盘中实时触发；daily_k=日K兜底结算；null / 缺省=尚未判定 */
+  entrySource?: 'intraday' | 'daily_k' | null;
+  /**
+   * 盘中买入判定结果标记：
+   *  - 'bought'：盘中已触发买入（配合 monitorBought）；
+   *  - 'unfilled'：9:30 未成交 / 14:50 仍未触发，【软标记】（status 仍为 open），
+   *    晚间日K兜底有权翻案重判，保证「绝对不漏票」；
+   *  - null / 缺省：尚未做盘中判定（老记录 / 非盘中接管日）。
+   * 注意：绝不落成终态 status='invalid'——settleOpenRecords 只处理 open，标 invalid 会永远无法翻案。
+   */
+  intradayEntryResolved?: 'bought' | 'unfilled' | null;
 }
 
 /** 价格/信号来源口径：区分盘中尾盘快照与未来收盘快照，统计层据此隔离，不可混算 */
@@ -361,6 +396,16 @@ export interface WinRateRecord {
   tPlus1SellDate: string | null;
   /** 买入时机：t_close=记录日收盘买入；t_next_open=记录日次日开盘买入（默认）；缺省按 t_next_open 处理 */
   buyTiming?: BuyTiming;
+  /** 盘中买入风格（记录时快照自 winrate-config，与 buyTiming 互补、不取代）；老记录缺省按 daily_only */
+  entryStyle?: EntryStyle;
+  /**
+   * 唯一允许盘中触发买入的日期（YYYY-MM-DD，用户拍板的日期锁）。
+   *  - t_next_open：记录日之后的第一个交易日（nextTradingDateGuess 估算，节假日由日K兜底补位）；
+   *  - t_close_or_next_open：顺延的次日（记录日尾盘买入交日K兜底，盘中只盯次日）；
+   *  - t_close / daily_only：null（完全不参与盘中买入监控）。
+   * 历史旧记录缺省为 null → 不参与盘中买入，零回归。
+   */
+  entryTargetDate?: string | null;
   /** 战法参数快照版本（对应 winrate-config 的 paramVersion） */
   paramVersion: string;
   /** 结算规则版本（v2-t1-fix 起）：标记该记录按哪版卖出判定口径生成 */
@@ -448,6 +493,36 @@ export function genWinRateRecordId(): string {
     /* ignore */
   }
   return `wr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * 严格 T+1 卖出日期锁（用户拍板双条件；必须同时用于 useIntradayMonitor 的
+ * getMonitable() 与 processCode() 两处，双保险防跨日误卖）。
+ *  - 买入当日（today === buyDate）盘中哪怕触及止损也绝对禁止卖出；必须在 T+1 日及以后。
+ *  - 第二条件兼容 tPlus1SellDate 已按真实交易日历回填的记录（停牌顺延 / 节假日）。
+ */
+export function canSellToday(record: WinRateRecord, today: string): boolean {
+  const buyDate = record.trade.buyDate;
+  if (!buyDate || today <= buyDate) return false;
+  return record.tPlus1SellDate == null || today >= record.tPlus1SellDate;
+}
+
+/**
+ * 估算「记录日之后的第一个交易日」：跳过周六 / 周日，不处理法定节假日。
+ * 记录时未来 K 线尚未产生，无法从行情精确取得；节假日错位由晚间日K兜底补位（不漏票）。
+ * 仅作为 entryTargetDate 的 best-effort 锁定值；实际买入日以结算按真实 K 线重算为准。
+ * 纯函数便于离线验收（不依赖交易日历 / API）。
+ */
+export function nextTradingDateGuess(date: string): string {
+  const d = new Date(date + 'T00:00:00');
+  if (Number.isNaN(d.getTime())) return date;
+  do {
+    d.setDate(d.getDate() + 1);
+  } while (d.getDay() === 0 || d.getDay() === 6);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

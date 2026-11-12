@@ -54,6 +54,7 @@ import {
 } from '../lib/winrate-minute';
 import {
   genWinRateRecordId,
+  nextTradingDateGuess,
   type WinRateRecord,
   type TradeRecord,
   type WinRateAnomaly,
@@ -61,7 +62,7 @@ import {
   type MinuteResolveMeta,
 } from '../domain/winrate';
 import { useWinRateStore, getLiveRecords, applyMinuteResolution, registerMinuteResolver } from './useWinRateStore';
-import { isWithinRecordWindow, isWeekday } from '../lib/tradingTime';
+import { isWithinRecordWindow, isWeekday, MARKET_CLOSE_MINS } from '../lib/tradingTime';
 
 const RECORD_TOP_N = 5;
 const KLINE_COUNT = 250;
@@ -97,8 +98,8 @@ function isForceRecordEnabled(): boolean {
   return false;
 }
 
-/** 6 位代码 → 带市场前缀 fullCode（与 server/index.mjs toFull 一致；WinRateRecord 仅存 6 位，结算时需还原） */
-function toFullCode(code: string): string {
+/** 6 位代码 → 带市场前缀 fullCode（与 server/index.mjs toFull 一致；供结算与盘中监控粗筛共用） */
+export function toFullCode(code: string): string {
   const c = String(code).padStart(6, '0');
   if (/^(6|9)/.test(c)) return 'sh' + c;
   if (/^(4|8)/.test(c)) return 'bj' + c;
@@ -204,9 +205,13 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
         holdDays: cfg.holdDays,
         tPlus1SellDate: null, // 由结算逻辑重算
         paramVersion: cfg.paramVersion,
-        // 快照记录必须继承战法配置的买入时机，否则会一律按默认 t_next_open 模拟，
-        // 与 t_close 战法（首板打板/龙头/隔夜持股）配置相悖。
+        // 快照记录必须继承战法配置的买入时机与买入风格，否则会一律按默认 t_next_open 模拟，
+        // 与 t_close 战法（首板打板/龙头/隔夜持股）配置相悖，也不会被盘中买入引擎接管。
         buyTiming: cfg.buyTiming,
+        entryStyle: cfg.entryStyle,
+        // 收盘快照同样锁定「记录日之后第一个交易日」为唯一盘中触发日；
+        // 历史快照回填时该日已过，不会误触发（晚间日K兜底正常结算）。
+        entryTargetDate: cfg.entryStyle === 'daily_only' ? null : nextTradingDateGuess(snapshot.date),
         ruleVersion: TRADE_RULE_VERSION,
         backfilled: isHistorical,
         recordedAt,
@@ -290,6 +295,8 @@ export interface SettleResult {
   settled: number;
   /** 买入日 K 未产生，或 t_close 记录日 K 尚未收盘定稿 → 跳过，保持「已记录/待买入」，留待后续结算 */
   skippedNoBuyDay: number;
+  /** 当天正由盘中 1min 引擎接管（未收盘）→ 跳过日K结算，避免用盘中未定稿 OHLC 抢先定买入价 */
+  skippedIntraday: number;
   errors: number;
 }
 
@@ -420,6 +427,11 @@ export function useWinRateRecorder() {
             tPlus1SellDate: tPlus1,
             paramVersion: STRATEGY_PARAM_VERSION,
             buyTiming: cfg.buyTiming,
+            // 【盘中实时买入引擎】记录时快照买入风格 + 锁定唯一盘中触发日。
+            // daily_only（隔夜持股 / 未接入战法）不参与盘中监控，entryTargetDate 置 null。
+            // 历史旧记录无这些字段 → 按 daily_only 处理，零回归。
+            entryStyle: cfg.entryStyle,
+            entryTargetDate: cfg.entryStyle === 'daily_only' ? null : nextTradingDateGuess(date),
             backfilled: isBackfill,
             // 触发时机口径：短期方案一律为盘中尾盘快照
             recordedAt,
@@ -456,13 +468,32 @@ export function useWinRateRecorder() {
    * 结算不受窗口限制；是否推进由 canSettleRecord 判定，买入日收盘即落盘 buyPrice。
    */
   const settleOpenRecords = useCallback(async (): Promise<SettleResult> => {
-    const result: SettleResult = { settled: 0, skippedNoBuyDay: 0, errors: 0 };
+    const result: SettleResult = { settled: 0, skippedNoBuyDay: 0, skippedIntraday: 0, errors: 0 };
     // 读最新内存 state（而非 recordsRef.current）：保证同一次周期内刚 append 的补拉/记录记录也能被结算
     const openRecords = getLiveRecords().filter((r) => r.trade.status === 'open');
     if (openRecords.length === 0) return result;
+    const now = new Date();
+    const todayStr = localDate(now);
+    const beforeClose = isWeekday(now) && now.getHours() * 60 + now.getMinutes() < MARKET_CLOSE_MINS;
     const refDates = await getReferenceTradingDates().catch(() => null);
     for (const rec of openRecords) {
       try {
+        // 【盘中实时买入引擎】当天是盘中接管日且尚未收盘：交给 useIntradayMonitor 用真实
+        // 1min 数据判定，不用盘中未定稿的日K抢先结算（否则会用不完整 OHLC 提前定买入价，
+        // 绕过实时监控、且与晚间兜底口径不一致）。15:00 后或次日打开应用 → 守卫失效，
+        // settleOpenRecords 正常执行晚间日K兜底（含 intraday_limit 翻案），保证绝对不漏票。
+        // 收盘前【一律】跳过（不论盘中是否已判定 bought / unfilled）：若 14:50 已写 unfilled
+        // 却放行，会用盘中未定稿日K抢先定案，把本该晚间翻案买入的票提前判未成交，违背
+        // 「绝对不漏票」；bought 同理应等完整日K推进卖出。15:00 后 beforeClose=false，守卫自然失效。
+        if (
+          beforeClose &&
+          rec.entryTargetDate === todayStr &&
+          rec.entryStyle != null &&
+          rec.entryStyle !== 'daily_only'
+        ) {
+          result.skippedIntraday++;
+          continue;
+        }
         const k = await marketApi.kline(toFullCode(rec.code), 'day', 'qfq', KLINE_COUNT);
         const daily = k.rows ?? [];
         if (!daily.length) {
@@ -627,7 +658,7 @@ export function useWinRateRecorder() {
       windowOpen,
       pendingToday,
       recordResults: [],
-      settle: { settled: 0, skippedNoBuyDay: 0, errors: 0 },
+      settle: { settled: 0, skippedNoBuyDay: 0, skippedIntraday: 0, errors: 0 },
       pendingDays: getPendingDays(),
       backfilledDays: backfill.dates,
       backfilledAdded: backfill.added,

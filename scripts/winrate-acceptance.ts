@@ -19,6 +19,9 @@ import {
   tradeViewCategory,
   TRADE_VIEW_STATUS_LABELS,
   SELL_REASON_LABELS,
+  canSellToday,
+  nextTradingDateGuess,
+  ENTRY_STYLE_LABELS,
 } from '../src/domain/winrate';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
@@ -34,6 +37,10 @@ import {
   sliceDayBars,
   periodFallbackChain,
   toMinuteBar,
+  evaluateIntradayEntry,
+  evaluateDailyEntryFallback,
+  buyRangeOverlap,
+  clampToBuyRange,
   type MinuteBar,
   type FetchMinuteBars,
 } from '../src/lib/winrate-minute';
@@ -1523,6 +1530,225 @@ function runDynamicRulesAssertion() {
   }
 }
 
+function runEntryEngineAssertion() {
+  // ── N1. 12 战法 entryStyle 映射（用户拍板：与 buyTiming 互补、不取代）──
+  section('盘中买入引擎 N1：12 战法 entryStyle 映射（与 buyTiming 互补、不取代）');
+  {
+    const EXPECT: Record<string, string> = {
+      'first-board': 'instant',
+      'board-advance': 'instant',
+      'trend-break': 'intraday_limit',
+      'ma-bull': 'intraday_limit',
+      'dragon': 'instant',
+      'pullback-buy': 'intraday_limit',
+      'dragon-return': 'intraday_limit',
+      'oversold-bounce': 'intraday_limit',
+      'ultra-short': 'instant',
+      'volume-price-up': 'intraday_limit',
+      'overnight-hold': 'daily_only',
+      'event': 'daily_only',
+    };
+    const ids = Object.keys(WINRATE_STRATEGY_CONFIG);
+    check(ids.length === 12, '战法配置共 12 个（实际 ' + ids.length + '）');
+    let allMatch = true;
+    for (const id of Object.keys(EXPECT)) {
+      if (WINRATE_STRATEGY_CONFIG[id]?.entryStyle !== EXPECT[id]) allMatch = false;
+    }
+    check(allMatch, '12 战法 entryStyle 逐项与拍板映射一致');
+    check(
+      WINRATE_STRATEGY_CONFIG['overnight-hold'].buyTiming === 't_close' &&
+        WINRATE_STRATEGY_CONFIG['first-board'].buyTiming === 't_close_or_next_open',
+      'entryStyle 不取代 buyTiming：两个战法原 buyTiming 保持不变',
+    );
+    check(
+      Object.keys(ENTRY_STYLE_LABELS).length === 3 &&
+        Object.values(ENTRY_STYLE_LABELS).every((v) => typeof v === 'string' && v.length > 0),
+      'ENTRY_STYLE_LABELS 三种风格文案齐全',
+    );
+  }
+
+  // ── N2. 严格 T+1 双条件日期锁（getMonitable / processCode 共用）──
+  section('盘中买入引擎 N2：canSellToday 严格 T+1 双条件日期锁');
+  {
+    const r = makeRec({ date: '2026-01-01' });
+    check(canSellToday(r, '2026-01-05') === false, 'buyDate 为空 → 禁止卖出');
+    r.trade.buyDate = '2026-01-02';
+    check(canSellToday(r, '2026-01-02') === false, '买入当日（today === buyDate）绝对禁止卖出');
+    check(canSellToday(r, '2026-01-01') === false, 'today < buyDate → 禁止卖出');
+    check(canSellToday(r, '2026-01-03') === true, 'tPlus1SellDate 缺省 → T+1 日可卖');
+    r.tPlus1SellDate = '2026-01-06';
+    check(canSellToday(r, '2026-01-03') === false, '停牌顺延：未到 tPlus1SellDate → 禁止');
+    check(canSellToday(r, '2026-01-06') === true, '到达 tPlus1SellDate → 可卖');
+    check(canSellToday(r, '2026-01-07') === true, '超过 tPlus1SellDate → 可卖');
+  }
+
+  // ── N3. 下一交易日估算（entryTargetDate 锁定值）──
+  section('盘中买入引擎 N3：nextTradingDateGuess 跳过周末');
+  {
+    check(nextTradingDateGuess('2026-01-02') === '2026-01-05', '周五 → 下周一');
+    check(nextTradingDateGuess('2026-01-03') === '2026-01-05', '周六 → 下周一');
+    check(nextTradingDateGuess('2026-01-04') === '2026-01-05', '周日 → 下周一');
+    check(nextTradingDateGuess('2026-01-05') === '2026-01-06', '周一 → 周二');
+    check(nextTradingDateGuess('not-a-date') === 'not-a-date', '非法日期 → 原样返回，不抛异常');
+  }
+
+  // ── N4. 区间工具（盘中与日K兜底共享的唯一口径）──
+  section('盘中买入引擎 N4：buyRangeOverlap / clampToBuyRange 区间语义');
+  {
+    check(buyRangeOverlap(10.1, 10.4, 10, 10.5) === true, '日内区间与买入区间相交 → true');
+    check(buyRangeOverlap(10.6, 10.9, 10, 10.5) === false, '全天最低 > 买高 → false');
+    check(buyRangeOverlap(9.1, 9.9, 10, 10.5) === false, '全天最高 < 买低 → false');
+    check(buyRangeOverlap(9.1, 10.9, null, null) === true, 'buyLow/buyHigh 缺失按无界放行 → true');
+    check(buyRangeOverlap(10.9, 10.1, 10, 10.5) === false, '非法区间 low>high → false');
+    check(clampToBuyRange(10.2, 10, 10.5) === 10.2, '价在区间内 → 原值');
+    check(clampToBuyRange(9.5, 10, 10.5) === 10, '低于买低 → clamp 到 buyLow');
+    check(clampToBuyRange(10.8, 10, 10.5) === 10.5, '高于买高 → clamp 到 buyHigh');
+    check(clampToBuyRange(10.8, null, null) === 10.8, '无界 → 原值');
+  }
+
+  // ── N5. 盘中买入主判定（纯函数）──
+  section('盘中买入引擎 N5：evaluateIntradayEntry 逐风格判定');
+  {
+    const mb = (date: string, open: number, high: number, low: number, close: number): MinuteBar =>
+      ({ date, open, high, low, close });
+    const plan = { buyLow: 10, buyHigh: 10.5 };
+    const inRange = [
+      mb('2026-01-02 09:30:00', 10.2, 10.3, 10.1, 10.25),
+      mb('2026-01-02 09:31:00', 10.3, 10.4, 10.2, 10.35),
+    ];
+    check(evaluateIntradayEntry(inRange, plan, 'daily_only').kind === 'skip', 'daily_only → skip（交日K结算）');
+    check(evaluateIntradayEntry(inRange, plan, undefined).kind === 'skip', '老记录缺省 entryStyle → skip（零回归）');
+    check(evaluateIntradayEntry([], plan, 'instant').kind === 'skip', '空 bars → skip');
+    check(
+      evaluateIntradayEntry(inRange, { buyLow: null, buyHigh: null }, 'instant').kind === 'skip',
+      '无买入计划 → skip（涨停票不误买）',
+    );
+
+    const d1 = evaluateIntradayEntry(inRange, plan, 'instant');
+    check(d1.kind === 'bought' && d1.buyPrice === 10.2, 'instant：9:30 开盘价在区间内 → 按开盘价买入');
+    check(
+      evaluateIntradayEntry([mb('2026-01-02 09:30:00', 10.8, 10.9, 10.7, 10.85)], plan, 'instant').kind === 'unfilled',
+      'instant：高开超限 → 未成交',
+    );
+    check(
+      evaluateIntradayEntry([mb('2026-01-02 09:30:00', 9.5, 9.6, 9.4, 9.55)], plan, 'instant').kind === 'unfilled',
+      'instant：低开跌破区间 → 未成交',
+    );
+    check(
+      evaluateIntradayEntry(
+        [mb('2026-01-02 09:30:00', 11, 11, 11, 11)],
+        { ...plan, limitUpPrice: 11 },
+        'instant',
+      ).kind === 'unfilled',
+      'instant：一字涨停无卖盘 → 未成交',
+    );
+
+    const d2 = evaluateIntradayEntry(inRange, plan, 'intraday_limit');
+    check(d2.kind === 'bought' && d2.barDate === '2026-01-02 09:30:00', 'intraday_limit：首根落入即买，返回首根 bar');
+    const later = [
+      mb('2026-01-02 09:30:00', 10.8, 10.9, 10.7, 10.85),
+      mb('2026-01-02 09:31:00', 10.4, 10.45, 10.2, 10.3),
+    ];
+    const d3 = evaluateIntradayEntry(later, plan, 'intraday_limit');
+    check(
+      d3.kind === 'bought' && d3.buyPrice === 10.4 && d3.barDate === '2026-01-02 09:31:00',
+      'intraday_limit：盘中某分钟跌进区间 → 按该分钟开盘价成交',
+    );
+    const never = [
+      mb('2026-01-02 09:30:00', 10.8, 10.9, 10.7, 10.85),
+      mb('2026-01-02 09:31:00', 10.7, 10.8, 10.6, 10.75),
+    ];
+    check(
+      evaluateIntradayEntry(never, plan, 'intraday_limit').kind === 'skip',
+      'intraday_limit：全天未进入区间 → skip（交 14:50 闸门 / 日K复核）',
+    );
+  }
+
+  // ── N6. 日K兜底翻案（决策点 2「绝对不漏票」）──
+  section('盘中买入引擎 N6：evaluateDailyEntryFallback 日K兜底翻案');
+  {
+    const dayK = { open: 10.8, high: 10.9, low: 10.05, close: 10.85 }; // 开盘超买高，但日内跌进区间
+    const plan = { buyLow: 10, buyHigh: 10.5 };
+    const f = evaluateDailyEntryFallback(dayK, plan, 'intraday_limit');
+    check(f != null && f.buyPrice === 10.5, '14:50 未成交但日K曾跌进区间 → 翻案买入（clamp 到买高）');
+    check(evaluateDailyEntryFallback(dayK, plan, 'instant') === null, 'instant 不走日K翻案（与开盘口径一致）');
+    check(evaluateDailyEntryFallback(dayK, plan, 'daily_only') === null, 'daily_only 不走日K翻案');
+    check(
+      evaluateDailyEntryFallback({ open: 10.8, high: 10.9, low: 10.7, close: 10.85 }, plan, 'intraday_limit') === null,
+      '全天未进入买入区间 → 不翻案（保持未成交）',
+    );
+    check(
+      evaluateDailyEntryFallback(dayK, { buyLow: null, buyHigh: null }, 'intraday_limit') === null,
+      '无买入计划 → 不翻案',
+    );
+    // 口径一致性：同一组 OHLC，盘中 intraday_limit 与日K翻案结论一致
+    const bars: MinuteBar[] = [
+      { date: '2026-01-02 09:30:00', open: 10.8, high: 10.9, low: 10.7, close: 10.85 },
+      { date: '2026-01-02 09:31:00', open: 10.4, high: 10.45, low: 10.05, close: 10.2 },
+    ];
+    const d = evaluateIntradayEntry(bars, plan, 'intraday_limit');
+    check(
+      d.kind === 'bought' && f != null && f.buyPrice > 0,
+      '盘中判定与日K翻案共享同一区间语义（均判可买，结果不打架）',
+    );
+  }
+
+  // ── N7. simulateTrade 端到端：防重锁定 / 日K翻案 / 老记录零回归 ──
+  section('盘中买入引擎 N7：simulateTrade 端到端（防重锁定 / 日K翻案 / 零回归）');
+  {
+    const base = { date: '2026-01-01', buyLow: 10, buyHigh: 10.5, stop: 9, target1: 11, target2: 12 };
+    const daily = [
+      ...HIST,
+      k('2026-01-01', 10, 10, 10, 10),
+      k('2026-01-02', 10.2, 10.6, 10.1, 10.5),
+      k('2026-01-03', 11.5, 11.6, 11.2, 11.4),
+    ];
+
+    // A) 盘中已买入 → 晚间结算锁定，绝不二次买入 / 覆盖触发价
+    const bought = makeRec(base);
+    bought.buyTiming = 't_next_open';
+    bought.entryStyle = 'intraday_limit';
+    bought.entryTargetDate = '2026-01-02';
+    bought.trade.monitorBought = true;
+    bought.trade.buyDate = '2026-01-02';
+    bought.trade.buyPrice = 10.25; // 盘中真实触发价 ≠ 次日开盘 10.2
+    bought.trade.entrySource = 'intraday';
+    bought.trade.intradayEntryResolved = 'bought';
+    const r1 = simulateTrade(bought, daily).trade;
+    check(r1.buyPrice === 10.25, '盘中买入价被锁定，不被日K开盘价覆盖（防二次买入）');
+    check(r1.buyDate === '2026-01-02', '买入日重绑到盘中锁定日');
+    check(r1.sellDate === '2026-01-03', '锁定分支只推进卖出，T+1 正常平仓');
+    check(r1.intradayEntryResolved == null, '结算后清空软标记，避免下次重复翻案');
+
+    // B) 14:50 软未成交 + 日K曾跌进区间 → 晚间翻案买入（绝对不漏票）
+    const unfilled = makeRec(base);
+    unfilled.buyTiming = 't_next_open';
+    unfilled.entryStyle = 'intraday_limit';
+    unfilled.entryTargetDate = '2026-01-02';
+    unfilled.trade.intradayEntryResolved = 'unfilled';
+    unfilled.trade.entrySource = 'intraday';
+    const dailyB = [
+      ...HIST,
+      k('2026-01-01', 10, 10, 10, 10),
+      k('2026-01-02', 10.8, 10.9, 10.05, 10.85), // 开盘 10.8 > 买高，但日内 low 10.05 跌进区间
+      k('2026-01-03', 11.5, 11.6, 11.2, 11.4),
+    ];
+    const r2 = simulateTrade(unfilled, dailyB).trade;
+    check(r2.buyPrice === 10.5, '日K兜底翻案买入（clamp 到买高 10.5）');
+    check(r2.entrySource === 'daily_k', '标记买入来源 daily_k');
+    check(r2.status === 'closed', '翻案后正常推进到平仓（未漏票）');
+
+    // C) 老记录无任何新字段 → 结算结果不变（302 用例零回归的显式锚点）
+    const legacy = makeRec(base);
+    legacy.buyTiming = 't_next_open';
+    const r3 = simulateTrade(legacy, daily).trade;
+    check(
+      r3.buyPrice === 10.2 && r3.sellDate === '2026-01-03',
+      '老记录（无新字段）按原 buyTiming 结算，零回归',
+    );
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1539,6 +1765,7 @@ async function main() {
   runDynamicRulesAssertion();
   await runMinuteAssertions();
   runMinuteStatsAssertion();
+  runEntryEngineAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

@@ -92,6 +92,7 @@
 import type { WinRateRecord, TradeRecord, WinRateAnomaly, SellReason, BuyTiming } from '../domain/winrate';
 import type { KlineRow, MinuteRow } from '../domain/types';
 import { TRADE_RULE_VERSION } from '../domain/winrate-config';
+import { evaluateDailyEntryFallback } from './winrate-minute';
 
 export interface SimSuspensionRange {
   from: string; // YYYY-MM-DD 含
@@ -339,6 +340,11 @@ function cloneTrade(t: TradeRecord): TradeRecord {
     status: t.status,
     anomalies: [...t.anomalies],
     backfilled: t.backfilled,
+    // 盘中实时买入引擎标记：重算时保留，供 updateTrade 写回 / 下次结算继续锁定
+    monitorClosed: t.monitorClosed,
+    monitorBought: t.monitorBought,
+    entrySource: t.entrySource ?? null,
+    intradayEntryResolved: t.intradayEntryResolved ?? null,
   };
 }
 
@@ -360,6 +366,14 @@ export function simulateTrade(
     return { trade, tPlus1SellDate: record.tPlus1SellDate ?? null };
   }
 
+  // 【盘中实时买入引擎】从入参（重算清空前）读取盘中标记：
+  //  - prevMonitorBought：盘中 1min 引擎已真实成交 → 本次结算锁定买入，只推进卖出（防二次买入）
+  //  - prevIntradayUnfilled：盘中 14:50 判未成交的软标记 → 允许日K兜底翻案重判（绝对不漏票）
+  // 老记录无这些字段 → 全部 false / null，走原有买入逻辑，零回归。
+  const prevMonitorBought = record.trade.monitorBought === true;
+  const prevIntradayUnfilled = record.trade.intradayEntryResolved === 'unfilled';
+  const entryStyle = record.entryStyle ?? null;
+
   // 重新模拟：清空旧执行结果，保留 backfilled 标记
   // 重算记录统一打当前规则版本（已平仓记录已在上方提前返回，保留其自身版本，不被覆盖）
   trade.ruleVersion = TRADE_RULE_VERSION;
@@ -376,6 +390,8 @@ export function simulateTrade(
     status: 'open' as TradeRecord['status'],
     anomalies: [] as WinRateAnomaly[],
     backfilled: baseBackfilled,
+    // 盘中软标记在本次日K结算后即结束使命（已翻案或已确认未成交），清掉避免下次重复翻案
+    intradayEntryResolved: null as TradeRecord['intradayEntryResolved'],
   });
 
   // 已退市 / 无数据
@@ -402,10 +418,19 @@ export function simulateTrade(
   let buyDate = buyDayK.date;
   const anomalies: WinRateAnomaly[] = [];
 
+  // ── A) 盘中已买入锁定（防重）────────────────────────────────────────
+  // 盘中 1min 引擎已按真实分钟价成交：晚间日K兜底只推进卖出，绝不二次买入 / 覆盖触发价。
+  // 锁定值取自入参 trade（重算前），并把 buyIdx 重绑到真实买入日，保证 T+1 可卖日正确。
+  const lockedBuyDate = prevMonitorBought ? record.trade.buyDate : null;
+  const lockedBuyPrice = prevMonitorBought ? record.trade.buyPrice : null;
+  const hasLockedEntry =
+    lockedBuyDate != null && lockedBuyPrice != null && lockedBuyPrice > 0;
+
   // ── 混合时机「前置降解」：先判记录日能不能买，再复用下面 t_close / t_next_open 两段逻辑 ──
   // 关键：顺延必须重绑 buyIdx / buyDayK / buyDate，否则 T+1 可卖日（sellStartIdx = buyIdx+1）
   // 会按记录日算、把可卖日提前一天。降解后下方分支与 T+1 计算一行都不用改。
-  if (buyTiming === 't_close_or_next_open') {
+  // 盘中已买入锁定时跳过降解（买入日已由盘中锁定，不需要再判记录日能否买）。
+  if (!hasLockedEntry && buyTiming === 't_close_or_next_open') {
     const tIdx = buyIdx;
     const tDayK = dailyK[tIdx];
     const skipSealedCheck = tIdx < 5; // 次新股：历史不足，沿用 t_close 的跳过约定
@@ -429,9 +454,40 @@ export function simulateTrade(
     }
   }
 
+  // ── B) intraday_limit 日K兜底翻案（决策点 2「绝对不漏票」）──────────────
+  // 盘中 14:50 判未成交，但日K显示收盘前曾跌进买入区间 → 用日内 low/high 复核成交。
+  // 与盘中 evaluateIntradayEntry 共享 buyRangeOverlap / clampToBuyRange，口径唯一、结果一致。
+  // 仅对「盘中软标记 + entryStyle=intraday_limit + 非 t_close 语义」的新记录生效；
+  // instant 按开盘价判定（与日K开盘口径一致，无需翻案），daily_only 本就不参与盘中监控。
+  // 老记录（302 用例）无软标记 → dailyFallbackBuy 恒 null → 走原分支，零回归。
+  const dailyFallbackBuy =
+    !hasLockedEntry &&
+    prevIntradayUnfilled &&
+    entryStyle === 'intraday_limit' &&
+    buyTiming !== 't_close'
+      ? evaluateDailyEntryFallback(
+          { open: buyDayK.open, high: buyDayK.high, low: buyDayK.low, close: buyDayK.close },
+          { buyLow: record.buyLow, buyHigh: record.buyHigh },
+          entryStyle,
+        )
+      : null;
+
   // ── 未成交判定 + 成交价（按买入时机分支）─────────────────────────────
   let buyPrice: number;
-  if (buyTiming === 't_close') {
+  if (hasLockedEntry) {
+    // A) 盘中已买入：重绑买入日 + 沿用盘中成交价，跳过全部买入判定（防二次买入 / 覆盖触发价）
+    const li = indexOfDate(dailyK, lockedBuyDate as string);
+    if (li >= 0) {
+      buyIdx = li;
+      buyDayK = dailyK[li];
+    }
+    buyDate = lockedBuyDate as string;
+    buyPrice = lockedBuyPrice as number;
+  } else if (dailyFallbackBuy) {
+    // B) 日K兜底翻案买入：用日内极值复核后的区间内价成交，标记来源 daily_k
+    buyPrice = dailyFallbackBuy.buyPrice;
+    trade.entrySource = 'daily_k';
+  } else if (buyTiming === 't_close') {
     // 封板拦截（尾盘涨停封死，实盘买不进 → 排除分母）：
     // 记录日收盘封死涨停（close===high 且涨幅达涨停限制）时，不能按收盘价强行买入，否则胜率虚高（幸存者偏差）。
     // 复用既有 getLimitPct（按代码前缀区分主板 10% / 创业板·科创板 20% / 北交所 30%；ST 主板 5%）与 LIMIT_TOLERANCE 容差。
