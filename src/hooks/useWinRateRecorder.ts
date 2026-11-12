@@ -339,10 +339,13 @@ export function useWinRateRecorder() {
       };
       try {
         // 关键：仅传该战法 id，使 hit 的 tradePlan / score 唯一归属该战法
+        // 新记录一律走全市场扫描：默认 TopN 按涨幅降序截断，普涨日会把「量价齐升
+        // 2-9%」这类区间型目标票整段挡在池外（漏斗截断偏差）。历史旧记录保持原口径，不回溯。
         const screen = await marketApi.screen({
           ids: [cfg.strategyId],
           sortBy: 'changePct',
           poolSize: 300,
+          scan: 'full',
         });
         if (!screen.ok) {
           res.errors.push(screen.reason ?? 'screen 失败');

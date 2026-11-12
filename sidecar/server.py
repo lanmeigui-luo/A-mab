@@ -5,6 +5,7 @@ A股博弈雷达 · AkShare sidecar（Python，端口 8788）
   - 板块列表 / 成分股
   - 全市场涨跌家数、涨停池（情绪面）
   - 全市场个股资金流排名（资金面）
+  - 全市场 A 股行情快照（候选池全市场扫描）
 
 设计原则：
   1. 只转发 AkShare 的真实返回，不做任何补值或模拟
@@ -449,6 +450,115 @@ def fund_rank():
         return fail(f"资金流排名失败：{type(e).__name__}: {str(e)[:180]}", t0)
 
 
+def market_spot():
+    """全市场 A 股行情快照 —— 候选池「全市场扫描」的唯一来源。
+
+    通道优先级（两级降级，任一成功都仍是**全市场**，绝不退化成 TopN 截断）：
+      1. 东财 stock_zh_a_spot_em —— 一次请求、字段最全（含换手率 / 流通市值）
+      2. 新浪 stock_zh_a_spot  —— 东财不可用时降级，AkShare 内部分 70 页拉全量
+         （实测 5579 只 / 约 29s），缺换手率 / 流通市值；由 Node 侧「精确行情补充」
+         用腾讯行情回填，字段缺失一律按 na 放行，绝不填 0 冒充真实行情。
+    两条都失败才返回 ok=false，由 Node 侧再降级回新浪 TopN 排行榜。
+
+    ⚠️ 不在这里做 TopN 截断：一旦截断就退回「漏斗截断偏差」。
+    本地缓存 60s（见 ROUTES），摊薄新浪通道的 30s 取数成本。
+    """
+    t0 = time.time()
+
+    def to_f(v):
+        if v is None:
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        # NaN / inf 一律当缺失
+        return f if f == f and abs(f) != float("inf") else None
+
+    def to_wan(v):
+        f = to_f(v)
+        return None if f is None else f / 10000.0
+
+    def norm_code(v):
+        s = str(v or "").strip().lower()
+        # 新浪返回带市场前缀：sh600000 / sz000001 / bj920000
+        if s[:2] in ("sh", "sz", "bj") and len(s) > 6:
+            s = s[2:]
+        s = s.zfill(6)
+        return s if len(s) == 6 and s.isdigit() else None
+
+    def full_code(c):
+        # 920 开头是北交所，必须先于「9 开头 → sh」判断，否则会错标成 sh920xxx
+        if c.startswith("920") or c.startswith(("4", "8")):
+            return "bj" + c
+        if c.startswith(("6", "9")):
+            return "sh" + c
+        return "sz" + c
+
+    em_error = None
+    em_rows = None
+    try:
+        em_rows = df_records(ak.stock_zh_a_spot_em())
+    except Exception as e:
+        em_error = f"{type(e).__name__}: {str(e)[:120]}"
+
+    if em_rows is not None:
+        out = []
+        for r in em_rows:
+            code = norm_code(r.get("代码"))
+            if not code:
+                continue
+            out.append({
+                "code": code,
+                "fullCode": full_code(code),
+                "name": r.get("名称"),
+                "price": to_f(r.get("最新价")),
+                "prevClose": to_f(r.get("昨收")),
+                "changePct": to_f(r.get("涨跌幅")),
+                "turnoverRate": to_f(r.get("换手率")),
+                "amountYuan": to_f(r.get("成交额")),
+                "floatMvWan": to_wan(r.get("流通市值")),
+                "totalMvWan": to_wan(r.get("总市值")),
+                "pe": to_f(r.get("市盈率-动态")),
+            })
+        return ok({
+            "rows": out, "count": len(out),
+            "channel": "eastmoney", "degraded": False,
+            "hasTurnover": True, "hasFloatMv": True,
+        }, t0)
+
+    # 东财不可用 → 新浪全市场（仍是全量扫描，不做 TopN 截断）
+    try:
+        recs = df_records(ak.stock_zh_a_spot())
+    except Exception as e:
+        return fail(
+            f"全市场快照双通道均失败（东财: {em_error}；新浪: {type(e).__name__}: {str(e)[:120]}）", t0)
+
+    out = []
+    for r in recs:
+        code = norm_code(r.get("代码"))
+        if not code:
+            continue
+        out.append({
+            "code": code,
+            "fullCode": full_code(code),
+            "name": r.get("名称"),
+            "price": to_f(r.get("最新价")),
+            "prevClose": to_f(r.get("昨收")),
+            "changePct": to_f(r.get("涨跌幅")),
+            "turnoverRate": None,
+            "amountYuan": to_f(r.get("成交额")),
+            "floatMvWan": None,
+            "totalMvWan": None,
+            "pe": None,
+        })
+    return ok({
+        "rows": out, "count": len(out),
+        "channel": "sina", "degraded": True,
+        "hasTurnover": False, "hasFloatMv": False,
+        "channelNote": "东财全市场快照不可用（" + str(em_error) + "），已降级新浪全市场快照；换手/流通市值由腾讯精确行情回填，缺失按 na 放行",
+    }, t0)
+
 MAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "board_map.json")
 
 
@@ -696,6 +806,7 @@ ROUTES = {
     "/market/limitup": lambda q: cached("market:limitup", 30, limit_up_pool),
     "/market/prev-limitup": lambda q: cached("market:prevlimitup", 300, prev_limit_up_pool),
     "/fund/rank": lambda q: cached("fund:rank", 60, fund_rank),
+    "/market/spot": lambda q: cached("market:spot", 60, market_spot),
 }
 
 

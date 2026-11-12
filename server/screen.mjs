@@ -321,6 +321,8 @@ async function mapLimit(arr, limit, fn) {
 export async function runScreen({
   sortBy = 'changePct',
   poolSize = 100,
+  /** 候选池口径：'topN'（默认，涨幅降序截断）/ 'full'（全市场扫描 + 快照预筛） */
+  scan = 'topN',
   // 120 根：首板打板的「非次新股」gate 要求 ind.bars>=100，60 根时该 gate 恒失败导致战法 0 命中。
   // 实测 300 只候选 / 120 根耗时 39.2s（60 根 76.9s），未暴增；改动覆盖 /api/screen 与收盘快照两条链路。
   klineBars = 120,
@@ -361,6 +363,9 @@ export async function runScreen({
   let pool = [];
   let trading = false;
   let rankMs = 0;
+  /** full 模式扫描统计（供 notes / 降级提示 / 前端口径展示） */
+  let fullScan = null;
+  let budgetSampled = 0;
 
   if (codes && codes.length) {
     // 自定义候选池：直接走腾讯批量行情，盘中盘后都可用
@@ -386,40 +391,73 @@ export async function runScreen({
       };
     }
   } else {
-    const perPage = Math.min(100, poolWanted);
-    const pages = Math.ceil(poolWanted / perPage);
-    for (let p = 1; p <= pages; p++) {
-      try {
-        const r = await rankSrc.fetchRank({ sortBy, page: p, perPage });
-        rankMs += r.elapsedMs;
-        trading = trading || r.trading;
-        pool = pool.concat(r.rows);
-      } catch (e) {
-        errors.push('候选池第 ' + p + ' 页失败：' + e.message);
+    // full 模式：一次拉全市场快照，不做 TopN 截断（消除漏斗截断偏差）。
+    // sidecar 内部「东财 → 新浪全市场」两级降级；两条都挂才走下面的 TopN 回退。
+    if (scan === 'full') {
+      const tSpot = Date.now();
+      const spot = await sidecarJson('/market/spot', 60000);
+      rankMs += Date.now() - tSpot;
+      if (spot?.ok && Array.isArray(spot.rows) && spot.rows.length) {
+        pool = spot.rows;
+        trading = pool.some((r) => (r.price ?? 0) > 0);
+        fullScan = {
+          scanned: spot.count ?? pool.length,
+          channel: spot.channel ?? 'unknown',
+          degraded: !!spot.degraded,
+          note: spot.channelNote ?? null,
+          hasTurnover: spot.hasTurnover !== false,
+          hasFloatMv: spot.hasFloatMv !== false,
+        };
+      } else {
+        errors.push('全市场快照不可用，已降级 TopN：' + (spot?.reason ?? '未知原因'));
+        fullScan = {
+          scanned: 0,
+          channel: 'fallback-topN',
+          degraded: true,
+          note: '全市场快照双通道均失败，已降级新浪 TopN 排行榜（存在截断偏差）',
+          hasTurnover: true,
+          hasFloatMv: true,
+        };
       }
     }
-    pool = pool.slice(0, poolWanted);
 
     if (!pool.length) {
-      return {
-        ok: false,
-        reason: '候选池为空' + (errors.length ? '：' + errors.join('；') : ''),
-        trading,
-        errors,
-        elapsedMs: Date.now() - t0,
-      };
-    }
+      // TopN 回退：默认口径，或 full 模式全市场双通道均失败时（明确标注截断偏差）
+      const perPage = Math.min(100, poolWanted);
+      const pages = Math.ceil(poolWanted / perPage);
+      for (let p = 1; p <= pages; p++) {
+        try {
+          const r = await rankSrc.fetchRank({ sortBy, page: p, perPage });
+          rankMs += r.elapsedMs;
+          trading = trading || r.trading;
+          pool = pool.concat(r.rows);
+        } catch (e) {
+          errors.push('候选池第 ' + p + ' 页失败：' + e.message);
+        }
+      }
+      pool = pool.slice(0, poolWanted);
 
-    // 未开盘时排行榜的排序字段全为 0，候选池无意义 —— 明确拒绝，不给误导性结果
-    if (!trading) {
-      return {
-        ok: false,
-        reason:
-          '当前非交易时段（未开盘），排行榜的涨跌幅/成交额字段均为 0，无法生成有效候选池。请改用自选股作为候选池，或在交易时段执行。',
-        trading: false,
-        needCustomPool: true,
-        elapsedMs: Date.now() - t0,
-      };
+      if (!pool.length) {
+        return {
+          ok: false,
+          reason: '候选池为空' + (errors.length ? '：' + errors.join('；') : ''),
+          trading,
+          errors,
+          elapsedMs: Date.now() - t0,
+        };
+      }
+
+      // 未开盘时排行榜的排序字段全为 0，候选池无意义 —— 明确拒绝，不给误导性结果
+      if (!trading) {
+        return {
+          ok: false,
+          reason:
+            '当前非交易时段（未开盘），排行榜的涨跌幅/成交额字段均为 0，无法生成有效候选池。请改用自选股作为候选池，或在交易时段执行。',
+          trading: false,
+          needCustomPool: true,
+          elapsedMs: Date.now() - t0,
+        };
+      }
     }
   }
 
@@ -435,6 +473,22 @@ export async function runScreen({
     prefiltered = before - pool.length;
   }
 
+  // 精算预算护栏：full 模式下「纯 K 线形态」战法无快照门槛可预筛，可能全市场放行。
+  // 默认 0 = 不限制（完备扫描，绝不漏票）；设 >0 时按 code 哈希均匀采样，
+  // 不按涨幅/换手排序，避免重新引入方向性截断偏差；采样比例在 notes 明示。
+  const budget = Number(process.env.FULL_SCAN_BUDGET || 0);
+  if (scan === 'full' && budget > 0 && pool.length > budget) {
+    const before = pool.length;
+    const hash = (r) => {
+      const s = String(r.code ?? r.fullCode ?? '');
+      let h = 0;
+      for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+      return h;
+    };
+    pool = [...pool].sort((a, b) => hash(a) - hash(b)).slice(0, budget);
+    budgetSampled = before - pool.length;
+  }
+
   // 3. 精确行情补充（拿涨停价等），批量一次请求（只对预筛后的幸存者）
   const poolCodes = pool.map((r) => r.fullCode).filter(Boolean);
   const qmap = new Map();
@@ -447,6 +501,19 @@ export async function runScreen({
     }
   } catch (e) {
     errors.push('精确行情补充失败（不影响主流程）：' + e.message);
+  }
+
+  // full 模式：新浪全市场通道缺换手率 / 流通市值，用上面已取的腾讯精确行情回填。
+  // 只补「缺失」字段、不覆盖已有真值；预筛发生在补数之前，字段缺失时按 na 放行，
+  // 绝不因补数而反过来枪毙候选。
+  if (scan === 'full' && pool.length) {
+    for (const r of pool) {
+      const q = qmap.get(r.fullCode);
+      if (!q) continue;
+      if (r.turnoverRate == null && q.turnoverRate != null) r.turnoverRate = q.turnoverRate;
+      if (r.floatMvWan == null && q.floatMvYi != null) r.floatMvWan = q.floatMvYi * 10000;
+      if (r.changePct == null && q.changePct != null) r.changePct = q.changePct;
+    }
   }
 
   const { ctx, meta: ctxMeta } = await loadContext();
@@ -663,6 +730,9 @@ export async function runScreen({
   return {
     ok: true,
     trading,
+    scan,
+    fullScan,
+    budgetSampled,
     poolSize: pool.length,
     poolScanned: poolScannedTotal || pool.length,
     prefiltered,
@@ -694,7 +764,13 @@ export async function runScreen({
       : null,
     errors: errors.slice(0, 10),
     source: {
-      pool: '新浪全市场排行',
+      pool: scan === 'full'
+        ? (fullScan?.channel === 'eastmoney'
+            ? '东财全市场快照'
+            : fullScan?.channel === 'sina'
+              ? '新浪全市场快照'
+              : '新浪全市场排行（降级 TopN）')
+        : '新浪全市场排行',
       quote: '腾讯财经',
       kline: klineTdx || klineFallback
         ? (klineTdx ? '通达信（主源）' : '腾讯财经（主源不可用，已降级）')
@@ -710,9 +786,18 @@ export async function runScreen({
       sentiment: ctxMeta.sentimentAvailable ? 'AkShare 东财涨停池' : null,
     },
     notes: [
-      '候选池按' + (sortBy === 'amount' ? '成交额' : sortBy === 'turnover' ? '换手率' : '涨跌幅') + `降序取 ${poolScannedTotal || pool.length} 只，非全市场全量扫描`,
+      fullScan && fullScan.scanned > 0
+        ? `全市场扫描 ${fullScan.scanned} 只（${fullScan.channel === 'eastmoney' ? '东财全市场快照' : '新浪全市场快照'}），${poolScannedTotal || pool.length} 只进入快照预筛，${pool.length} 只进入 K 线精算`
+        : '候选池按' + (sortBy === 'amount' ? '成交额' : sortBy === 'turnover' ? '换手率' : '涨跌幅') + `降序取 ${poolScannedTotal || pool.length} 只，非全市场全量扫描`,
       prefiltered
         ? `快照预筛剔除 ${prefiltered} 只（用行情快照即可否定的：ST / 科创创业北交 / 涨幅不在区间 / 换手不在区间 / 市值不在区间），${pool.length} 只进入 K 线精算`
+        : null,
+      fullScan?.degraded ? `⚠️ ${fullScan.note}` : null,
+      budgetSampled > 0
+        ? `⚠️ 精算预算 ${budget} 只：按代码哈希均匀采样保留 ${pool.length} 只（采样剔除 ${budgetSampled} 只，与选股条件无关、无方向偏差）；设 FULL_SCAN_BUDGET=0 可关闭采样`
+        : null,
+      scan === 'full' && !fullScan?.degraded && pool.length > 1500
+        ? `⚠️ 本次 ${pool.length} 只进入 K 线精算（该战法依赖 K 线形态、无快照门槛可预筛），耗时较长；可设 FULL_SCAN_BUDGET=N 启用均匀采样`
         : null,
       ctxMeta.fundAvailable
         ? `资金面已接入：全市场 ${ctxMeta.fundRows} 只资金流排名（AkShare）`

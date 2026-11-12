@@ -125,7 +125,8 @@ export async function runDailyWinRateSnapshot() {
     try {
       // 与前端 recordStrategy 一致：单战法过滤，使 tradePlan / score 唯一归属该战法
       // 显式写 klineBars：自动记录链路必须拿到足量 K 线，否则首板打板等战法恒 0 命中
-      const res = await runScreen({ strategyIds: [def.id], sortBy: 'changePct', poolSize: 300, klineBars: 120 });
+      // 收盘快照（新记录）一律全市场扫描，消除漏斗截断偏差；已落盘历史快照不回溯。
+      const res = await runScreen({ strategyIds: [def.id], sortBy: 'changePct', poolSize: 300, klineBars: 120, scan: 'full' });
       if (!res.ok) {
         // trading=false（盘后数据清零）等：保护性跳过，不落盘垃圾
         errors.push(`${def.id}: ${res.reason || 'ok=false'}`);

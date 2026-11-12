@@ -1411,47 +1411,58 @@ function overnightScore(ind, snap, ctx = {}) {
 }
 
 /**
- * 廉价预筛：仅用行情快照字段（名称/代码/涨幅/换手/市值）就能否定的候选，
- * 在拉 K 线 / 分时 / 上市日期之前直接剔除。
+ * 逐战法「快照可安全否定」白名单 —— 表驱动，未登记一律放行。
  *
- * 存在的理由：隔夜持股法要的是「涨幅 3-5%」这种中等涨幅，而候选池是按
- * 涨跌幅/成交额/换手率降序取 TopN —— 涨幅榜前排全是涨停票，
- * 3-5% 的票排在 100 名之后，小池子根本切不进来（实测池子 80 只时该条件 pass=0）。
- * 只有把池子放大到能覆盖中等涨幅区间，才谈得上判定；但池子一大，
- * 给每只都拉 K 线 + 分时 + 上市日期就太慢。
- * 解法：先用快照字段把绝大多数候选否掉（实测 2000 → 几十只），
- * 再对幸存者做重计算。这既保住了召回，也把耗时压在可接受范围。
+ * 只登记 gates 里用行情快照就能判定的**硬门槛**：gates 必须全过才算命中，
+ * 所以不满足 = 必不命中，可以安全剔除。
+ * conds 是按 minRatio 算命中率的，单条不满足仍可能命中，绝不前置。
  *
- * 只对本战法生效：其余战法的核心条件（均线/涨停历史/量价）依赖 K 线，
- * 快照字段不足以安全否定，贸然预筛会漏票。
+ * 未登记的战法（首板打板 / 连板晋级 / 趋势突破 / 均线多头 / 龙头 / 低吸回踩 /
+ * 龙回头 / 超跌反弹 / 超短线 / 事件驱动）核心条件依赖 K 线形态、涨停池、分时，
+ * 快照不足以安全否定 —— 一律放行，绝不提前枪毙。
+ * 例：首板打板 gates 只排 688，若复用隔夜的「排除 300/301」会误杀创业板；
+ *     低吸回踩要的是「缩量回踩」形态，当日跌幅/换手都不能代表它。
  *
- * @returns true = 需要进入精算；false = 可安全剔除
+ * 新增战法门槛前，必须先核对其 gates 实现，确认确为硬门槛再登记。
+ * 字段缺失（休市 / 新浪通道无换手市值）一律按 na 放行，不填 0 冒充真实行情。
  */
+const SNAP_GATES = {
+  // 隔夜持股法：gates 含 非ST / 非科创创业北交 / 涨幅3-5% / 换手5-10% / 流通市值50-200亿
+  'overnight-hold': ['st', 'board', 'change', 'turnover', 'floatMv'],
+  // 量价齐升：gates[0] = 涨幅 2-9%（另两条 gates 依赖 K 线，不前置）
+  'volume-price-up': ['change'],
+};
+
 export function prefilterSnap(strategyId, snap, overrides = null, opts = {}) {
-  if (strategyId !== 'overnight-hold') return true;
+  const gates = SNAP_GATES[strategyId];
+  if (!gates || !gates.length) return true; // 未登记 → 一律放行
   const def = S[strategyId];
   if (!def) return true;
   const p = overrides?.[strategyId] ? { ...def.params, ...overrides[strategyId] } : def.params;
 
-  // ST / *ST：名称层面即可判定，与 K 线无关
-  if (/\*?ST/i.test(snap.name ?? '')) return false;
-
-  // 板块：代码前缀判定（688/689 科创、300/301 创业、4/8/920 北交）
-  const code6 = String(snap.code ?? '').replace(/\D/g, '').padStart(6, '0');
-  if (/^(300|301|688|689|4|8|920)/.test(code6)) return false;
-
-  // 流通市值：快照自带，盘前盘后同样有效
-  const mv = snap.floatMvWan != null ? snap.floatMvWan / 10000 : null;
-  if (mv != null && (mv < p.floatMvMinYi || mv > p.floatMvMaxYi)) return false;
-
+  if (gates.includes('st')) {
+    if (/\*?ST/i.test(snap.name ?? '')) return false;
+  }
+  if (gates.includes('board')) {
+    const code6 = String(snap.code ?? '').replace(/\D/g, '').padStart(6, '0');
+    if (/^(300|301|688|689|4|8|920)/.test(code6)) return false;
+  }
   // 涨幅 / 换手：只在交易时段可信。非交易时段排行榜这两个字段为 0，
   // 若照常否定会把所有候选清空（盘后复盘会 0 命中），故此时跳过。
   if (opts.trading !== false) {
-    const pct = snap.changePct;
-    if (pct != null && (pct < p.changeMin || pct > p.changeMax)) return false;
-    const turn = snap.turnoverRate;
-    if (turn != null && (turn < p.turnoverMin || turn > p.turnoverMax)) return false;
+    if (gates.includes('change') && p.changeMin != null && p.changeMax != null) {
+      const pct = snap.changePct;
+      if (pct != null && (pct < p.changeMin || pct > p.changeMax)) return false;
+    }
+    if (gates.includes('turnover') && p.turnoverMin != null && p.turnoverMax != null) {
+      const turn = snap.turnoverRate;
+      if (turn != null && (turn < p.turnoverMin || turn > p.turnoverMax)) return false;
+    }
   }
-
+  // 流通市值：快照自带，盘前盘后同样有效
+  if (gates.includes('floatMv') && p.floatMvMinYi != null && p.floatMvMaxYi != null) {
+    const mv = snap.floatMvWan != null ? snap.floatMvWan / 10000 : null;
+    if (mv != null && (mv < p.floatMvMinYi || mv > p.floatMvMaxYi)) return false;
+  }
   return true;
 }

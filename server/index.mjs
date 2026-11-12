@@ -482,6 +482,9 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/screen') {
       const sortBy = url.searchParams.get('sortBy') || 'changePct';
+      // 候选池口径：topN（默认，按涨幅降序截断）/ full（全市场扫描 + 快照预筛）。
+      // full 用于消除「漏斗截断偏差」：普涨日 2-9% 区间的票进不了涨幅榜 TopN。
+      const scan = url.searchParams.get('scan') === 'full' ? 'full' : 'topN';
       // 上限 5000：隔夜持股法需要覆盖「涨幅 3-5%」这种中等涨幅，
       // 而它在涨跌幅榜上排在 100 名开外，池子太小会整段切掉（精算量由快照预筛兜住）。
       // 3000 / 5000 属用户可选的「宽扫描」档位，分页取数 + 快照预筛即可承接。
@@ -505,10 +508,11 @@ const server = http.createServer(async (req, res) => {
           params = null;
         }
       }
+      // 缓存 key 必须带 scan：topN 与 full 的候选池口径完全不同，串味会返回错误结果集。
       const data = await withCache(
-        `screen:${codes.length ? 'custom:' + codes.join('|') : sortBy + ':' + poolSize}:${ids.join('|')}:${params ? JSON.stringify(params) : ''}`,
+        `screen:${codes.length ? 'custom:' + codes.join('|') : sortBy + ':' + poolSize}:${ids.join('|')}:${params ? JSON.stringify(params) : ''}:scan=${scan}`,
         120000,
-        () => runScreen({ sortBy, poolSize, strategyIds: ids.length ? ids : null, codes: codes.length ? codes : null, params }),
+        () => runScreen({ sortBy, poolSize, scan, strategyIds: ids.length ? ids : null, codes: codes.length ? codes : null, params }),
       );
       return json(res, 200, data);
     }

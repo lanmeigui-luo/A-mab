@@ -151,6 +151,8 @@ export const marketApi = {
       ids?: string[];
       codes?: string[];
       params?: Record<string, Record<string, number>> | null;
+      /** 候选池口径：省略/默认 topN（涨幅降序截断）；'full' = 全市场扫描 + 快照预筛（胜率记录链路使用） */
+      scan?: 'topN' | 'full';
     } = {},
   ) => {
     const ps = new URLSearchParams();
@@ -158,6 +160,7 @@ export const marketApi = {
     if (opts.poolSize) ps.set('poolSize', String(opts.poolSize));
     if (opts.ids?.length) ps.set('ids', opts.ids.join(','));
     if (opts.codes?.length) ps.set('codes', opts.codes.join(','));
+    if (opts.scan) ps.set('scan', opts.scan);
     const hasParams = opts.params && Object.keys(opts.params).length > 0;
     if (!hasParams) return get<ScreenResponse>('/api/screen?' + ps.toString());
     return post<ScreenResponse>('/api/screen?' + ps.toString(), { params: opts.params });
