@@ -65,6 +65,7 @@ import {
 } from '../domain/winrate';
 import { useWinRateStore, getLiveRecords, applyMinuteResolution, registerMinuteResolver } from './useWinRateStore';
 import { isWithinRecordWindow, isWeekday, MARKET_CLOSE_MINS } from '../lib/tradingTime';
+import { toFullCode } from '../lib/full-code';
 
 const RECORD_TOP_N = 5;
 const KLINE_COUNT = 250;
@@ -100,13 +101,9 @@ function isForceRecordEnabled(): boolean {
   return false;
 }
 
-/** 6 位代码 → 带市场前缀 fullCode（与 server/index.mjs toFull 一致；供结算与盘中监控粗筛共用） */
-export function toFullCode(code: string): string {
-  const c = String(code).padStart(6, '0');
-  if (/^(6|9)/.test(c)) return 'sh' + c;
-  if (/^(4|8)/.test(c)) return 'bj' + c;
-  return 'sz' + c;
-}
+// 全市场唯一口径已下沉到 src/lib/full-code.ts（920 北交所前缀修复）。
+// re-export 保持 useIntradayMonitor 的既有 import 路径不变。
+export { toFullCode };
 
 /** 模块级：分钟线拉取（marketApi.klineMin → MinuteBar[]），供内联结算、启动重试与盘中实时监控共用 */
 export const fetchMinuteBars: FetchMinuteBars = async (
@@ -337,6 +334,8 @@ export interface DailyReport {
   /** 收盘快照（口径 A）补拉结果：本次回填的日期与新增记录数 */
   backfilledDays?: string[];
   backfilledAdded?: number;
+  /** 本次打开是否触发了当日收盘快照后台补跑 */
+  snapshotBackfillTriggered?: boolean;
   note?: string;
 }
 
@@ -536,7 +535,13 @@ export function useWinRateRecorder() {
         const k = await marketApi.kline(toFullCode(rec.code), 'day', 'qfq', KLINE_COUNT);
         const daily = k.rows ?? [];
         if (!daily.length) {
-          // K 线彻底缺失（极少见，多为网络/源抖动）：留待下轮结算，不在此标 data_missing
+          // K 线彻底缺失（网络/源抖动，或代码前缀不被数据源识别）：留待下轮结算。
+          // 但必须留下可见异常标注，避免记录静默卡死在「待买入」、异常列一直显示「—」。
+          // 只写 anomalies、绝不改 status（状态机与 375 验收零回归）；下轮结算成功时
+          // simulateTrade 会清空 anomalies，标记自动消失。
+          if (!rec.trade.anomalies.includes('data_missing')) {
+            updateTrade(rec.id, { anomalies: [...rec.trade.anomalies, 'data_missing'] });
+          }
           result.errors++;
           continue;
         }
@@ -630,8 +635,10 @@ export function useWinRateRecorder() {
    * 与 recordStrategy 同等去重：按 (date, strategyId, code) 跳过已存在记录。
    * 任何网络/解析异常都静默吞掉，绝不阻断应用打开或原结算流程。
    */
-  const backfillCloseSnapshots = useCallback(async (): Promise<{ dates: string[]; added: number }> => {
-    const out: { dates: string[]; added: number } = { dates: [], added: 0 };
+  const backfillCloseSnapshots = useCallback(async (): Promise<{
+    dates: string[]; added: number; snapshotBackfillTriggered: boolean;
+  }> => {
+    const out = { dates: [] as string[], added: 0, snapshotBackfillTriggered: false };
     try {
       const datesRes = await marketApi.winrateSnapshotDates();
       // 后端已实现「userData 优先 + 项目根兜底」双读；空列表不再直接返回，仍需检测快照缺失日
@@ -650,6 +657,16 @@ export function useWinRateRecorder() {
 
       // (1) 快照缺失日：回看窗口内的工作日，无快照、无真实记录、且非今天 → 每天一条 snapshot_missing
       const snapSet = new Set(snapshotDates);
+      // 【自动补跑】今天是工作日、已过 15:05、当日快照缺失 → fire-and-forget 触发后端异步补跑。
+      // 全市场扫描 11 个战法约 20 分钟，后端 setImmediate 立即返回，不阻塞应用打开；
+      // 本次页面不会立刻看到结果，完成后刷新页面由 backfill 补录。
+      const nowForBackfill = new Date();
+      const afterSnapshotWindow =
+        nowForBackfill.getHours() * 60 + nowForBackfill.getMinutes() >= 15 * 60 + 5;
+      if (isWeekday(nowForBackfill) && afterSnapshotWindow && !snapSet.has(todayStr)) {
+        marketApi.runWinrateSnapshot().catch(() => undefined);
+        out.snapshotBackfillTriggered = true;
+      }
       const start = new Date();
       start.setDate(start.getDate() - PENDING_LOOKBACK_DAYS);
       const end = new Date();
@@ -735,6 +752,7 @@ export function useWinRateRecorder() {
       pendingDays: getPendingDays(),
       backfilledDays: backfill.dates,
       backfilledAdded: backfill.added,
+      snapshotBackfillTriggered: backfill.snapshotBackfillTriggered,
     };
 
     if (!windowOpen && !isForceRecordEnabled()) {

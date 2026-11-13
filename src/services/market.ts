@@ -175,4 +175,10 @@ export const marketApi = {
     get<{ ok: boolean; snapshot: WinRateSnapshot } | { ok: false; reason: string }>(
       '/api/winrate-snapshot?date=' + encodeURIComponent(date),
     ),
+
+  /** 收盘快照补跑：后端异步启动全市场扫描，立即返回；失败静默吞掉，不阻断应用打开 */
+  runWinrateSnapshot: () =>
+    post<{ ok: boolean; started: boolean; date: string; reason: string }>(
+      '/api/winrate-snapshot/run', {},
+    ),
 };

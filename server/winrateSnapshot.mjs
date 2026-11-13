@@ -34,6 +34,8 @@ const SNAPSHOT_DIRS = SNAPSHOT_DIR === LEGACY_SNAPSHOT_DIR
   ? [SNAPSHOT_DIR]
   : [SNAPSHOT_DIR, LEGACY_SNAPSHOT_DIR];
 const TOP_N = 5;
+/** 补跑任务并发锁：全市场扫描 11 个战法耗时约 20 分钟，绝不重复启动 */
+let backfillRunning = false;
 
 /** 本地日期 YYYY-MM-DD（避免 UTC 偏移吞日期） */
 function localDate(d = new Date()) {
@@ -200,6 +202,43 @@ export async function runDailyWinRateSnapshot() {
   );
 
   return { date, ok: true, strategies: strategiesOut.length, hits: totalHits, file: snapshotPath(date), errors };
+}
+
+/**
+ * 收盘快照【手动/自动补跑】入口（用户拍板：应用打开时自动补跑）。
+ * 触发条件：交易日 + 已过 15:05 + 当日快照不存在 + 当前无补跑任务。
+ * 全市场扫描 11 个战法约 20 分钟，用 setImmediate 后台异步执行，立即返回不阻塞前端；
+ * 本次打开不会立刻看到结果，完成后刷新页面由 backfillCloseSnapshots 补录。
+ * 是否交易日用后端的 HOLIDAYS 权威判定（前端仅用工作日粗筛）。
+ */
+export async function triggerSnapshotBackfill(holidays = new Set()) {
+  const now = new Date();
+  const date = localDate(now);
+  if (computeMarketStatus(now, holidays) === 'holiday') {
+    return { ok: true, started: false, date, reason: '非交易日，无需补跑' };
+  }
+  const mins = now.getHours() * 60 + now.getMinutes();
+  if (mins < 15 * 60 + 5) {
+    return { ok: true, started: false, date, reason: '未到 15:05，暂不补跑' };
+  }
+  if (backfillRunning) {
+    return { ok: true, started: false, date, reason: '补跑任务已在运行' };
+  }
+  if (await snapshotExists(date)) {
+    return { ok: true, started: false, date, reason: '当日快照已存在' };
+  }
+  backfillRunning = true;
+  setImmediate(async () => {
+    try {
+      console.log('[Scheduler] 应用触发补跑：开始 ' + date);
+      await runDailyWinRateSnapshot();
+    } catch (e) {
+      console.error('[Scheduler] 补跑失败: ' + ((e && e.message) || e));
+    } finally {
+      backfillRunning = false;
+    }
+  });
+  return { ok: true, started: true, date, reason: '已在后台启动当日收盘快照补跑' };
 }
 
 /** 是否处于「应触发收盘快照」的窗口：交易日 且 15:05-15:10 */

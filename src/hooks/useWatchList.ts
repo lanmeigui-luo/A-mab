@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { inferMarket as inferMarketShared } from '../lib/full-code';
 
 const STORAGE_KEY = 'radar.watchlist.v1';
 const SCHEMA_VERSION = 1;
@@ -15,16 +16,11 @@ interface Persisted {
   items: WatchItem[];
 }
 
-/** 6 位代码推断市场：沪 60/68/9，深 00/30，北交所 4/8 */
+/** 6 位代码推断市场：沪 60/68/9，深 00/30，北交所 920/4/8。
+ *  严格校验输入格式（不加补零），市场判断委托 src/lib/full-code.ts 唯一口径。 */
 export function inferMarket(code: string): 'sh' | 'sz' | 'bj' | null {
   if (!/^\d{6}$/.test(code)) return null;
-  const head2 = code.slice(0, 2);
-  const head1 = code.slice(0, 1);
-  if (head1 === '6' || head1 === '9') return 'sh';
-  if (head2 === '00' || head2 === '30') return 'sz';
-  if (head1 === '4' || head1 === '8') return 'bj';
-  if (head2 === '68') return 'sh';
-  return null;
+  return inferMarketShared(code);
 }
 
 export function toFullCode(code: string): string | null {

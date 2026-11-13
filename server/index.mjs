@@ -19,7 +19,7 @@ import * as sina from './sources/sina.mjs';
 import * as rankSrc from './sources/sina_rank.mjs';
 import { runScreen, getCachedCtx, ensureCtx } from './screen.mjs';
 import { isKlineBatchValid } from './klineValidate.mjs';
-import { startScheduler, listSnapshotDates, readSnapshot } from './winrateSnapshot.mjs';
+import { startScheduler, listSnapshotDates, readSnapshot, triggerSnapshotBackfill } from './winrateSnapshot.mjs';
 import { STRATEGY_DEFS } from './strategies/index.mjs';
 import { evaluateStrategies, scoreCandidate, computeIndicators, inferLimitUp } from './strategies/index.mjs';
 import { buildTradePlan } from './strategies/tradeplan.mjs';
@@ -972,6 +972,12 @@ async function marketTurnover() {
       const snap = await readSnapshot(date);
       if (!snap) return json(res, 404, { ok: false, reason: '该日期无收盘快照' });
       return json(res, 200, { ok: true, snapshot: snap });
+    }
+
+    // 收盘快照补跑：15:05 后打开应用且当日快照缺失时由前端 fire-and-forget 调用。
+    if (p === '/api/winrate-snapshot/run' && req.method === 'POST') {
+      const r = await triggerSnapshotBackfill(HOLIDAYS);
+      return json(res, 200, r);
     }
 
     return json(res, 404, { error: 'not found: ' + p });

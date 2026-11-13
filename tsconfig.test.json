@@ -21,6 +21,7 @@
     "src/lib/winrate-sim.ts",
     "src/lib/winrate-stats.ts",
     "src/lib/winrate-minute.ts",
+    "src/lib/full-code.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

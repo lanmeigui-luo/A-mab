@@ -11,14 +11,8 @@ import { marketApi } from '@/services/market';
 import type { KlineResponse, KlineRow } from '@/domain/types';
 import { getWinRateConfig } from '@/domain/winrate-config';
 import { fmtNum } from '@/lib/format';
+import { toFullCode } from '@/lib/full-code';
 
-/** 6 位代码 → 带市场前缀 fullCode（与 useWinRateRecorder.toFullCode 规则一致；WinRateRecord.code 仅存 6 位） */
-function toFullCode(code: string): string {
-  const c = String(code).padStart(6, '0');
-  if (/^(6|9)/.test(c)) return 'sh' + c;
-  if (/^(4|8)/.test(c)) return 'bj' + c;
-  return 'sz' + c;
-}
 
 const UP_COLOR = '#e23b3b'; // 红涨
 const DOWN_COLOR = '#16a34a'; // 绿跌

@@ -27,6 +27,7 @@ import {
   placeholderKind,
   isPlaceholderRecord,
 } from '../src/domain/winrate';
+import { toFullCode, inferMarket } from '../src/lib/full-code';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -1830,6 +1831,31 @@ function runPlaceholderAssertion() {
   }
 }
 
+function runFullCodeAssertion() {
+  section('代码前缀 U1：920 北交所段必须判 bj（修复 sh920xxx 拉取空数组）');
+  check(toFullCode('920045') === 'bj920045', '920045 → bj920045');
+  check(toFullCode('920378') === 'bj920378', '920378 → bj920378');
+  check(toFullCode('920050') === 'bj920050', '920050 → bj920050');
+  check(inferMarket('920045') === 'bj', 'inferMarket(920045) = bj');
+  check(toFullCode('920000') === 'bj920000', '920000 边界 → bj');
+
+  section('代码前缀 U2：其余市场段保持原有口径（零回归）');
+  check(toFullCode('430047') === 'bj430047', '43xxxx → bj（北交所老段）');
+  check(toFullCode('830799') === 'bj830799', '83xxxx → bj（北交所老段）');
+  check(toFullCode('600000') === 'sh600000', '60xxxx → sh');
+  check(toFullCode('688001') === 'sh688001', '688xxx → sh（科创板）');
+  check(toFullCode('900001') === 'sh900001', '9 开头非 920（沪 B）仍属 sh，不能误改');
+  check(toFullCode('000001') === 'sz000001', '00xxxx → sz');
+  check(toFullCode('300750') === 'sz300750', '30xxxx → sz（创业板）');
+  check(inferMarket('600000') === 'sh', 'inferMarket(600000) = sh');
+  check(inferMarket('000001') === 'sz', 'inferMarket(000001) = sz');
+  check(inferMarket('430047') === 'bj', 'inferMarket(430047) = bj');
+
+  section('代码前缀 U3：短代码补零与纯函数性');
+  check(toFullCode('45') === 'sz000045', '短代码补零到 6 位');
+  check(toFullCode('600000') === toFullCode('600000'), '同输入恒等（无副作用/无随机）');
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1848,6 +1874,7 @@ async function main() {
   runMinuteStatsAssertion();
   runEntryEngineAssertion();
   runPlaceholderAssertion();
+  runFullCodeAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);
