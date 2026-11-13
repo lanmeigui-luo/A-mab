@@ -129,7 +129,7 @@ export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
   backfilled: '补记录',
   param_changed: '参数版本变更',
   no_signal: '当日全市场无符合该战法条件的标的',
-  snapshot_missing: '快照缺失（当天软件未运行）',
+  snapshot_missing: '快照缺失（当天未生成收盘快照）',
   high_open_over_target1: '高开越过目标一(未成交)',
 };
 

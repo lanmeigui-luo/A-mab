@@ -1785,7 +1785,7 @@ function runPlaceholderAssertion() {
   });
   check(missing.trade.status === 'anomaly', 'status=anomaly');
   check(missing.trade.anomalies.includes('snapshot_missing'), 'anomaly=snapshot_missing');
-  check(ANOMALY_LABELS.snapshot_missing === '快照缺失（当天软件未运行）', '文案明确「未运行」');
+  check(ANOMALY_LABELS.snapshot_missing === '快照缺失（当天未生成收盘快照）', '文案明确「未运行」');
   check(missing.backfilled === true, 'backfilled=true（回看窗口内补记）');
 
   section('占位记录 P3：分类与识别（tradeViewCategory 口径不变）');

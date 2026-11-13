@@ -192,6 +192,14 @@ export async function runDailyWinRateSnapshot() {
     strategies: strategiesOut,
   };
 
+  // 若所有启用战法都因上游不可用而跳过（trading=false 等），绝不落盘空快照：
+  // 否则前端会把「没跑成」误判成「跑了但 0 命中」并生成 no_signal，属于伪造审计事实。
+  // 不写文件 → 前端正确显示 snapshot_missing，且定时器下一分钟会继续重试。
+  if (enabled.length > 0 && errors.length >= enabled.length) {
+    console.warn('[Scheduler] 全部 ' + enabled.length + ' 个战法取数失败，跳过落盘（保留「快照缺失」语义）：' + errors[0]);
+    return { date, ok: false, strategies: 0, hits: 0, file: null, errors };
+  }
+
   await writeFile(snapshotPath(date), JSON.stringify(snapshot, null, 2), 'utf8');
 
   if (errors.length) {
@@ -221,6 +229,7 @@ export async function triggerSnapshotBackfill(holidays = new Set()) {
   if (mins < 15 * 60 + 5) {
     return { ok: true, started: false, date, reason: '未到 15:05，暂不补跑' };
   }
+  // 与定时器共用同一「交易日 + >=15:05」判定（函数声明提升，定义在本文件下方）
   if (backfillRunning) {
     return { ok: true, started: false, date, reason: '补跑任务已在运行' };
   }
@@ -241,11 +250,16 @@ export async function triggerSnapshotBackfill(holidays = new Set()) {
   return { ok: true, started: true, date, reason: '已在后台启动当日收盘快照补跑' };
 }
 
-/** 是否处于「应触发收盘快照」的窗口：交易日 且 15:05-15:10 */
+/**
+ * 是否应触发收盘快照：交易日 且 当前时间 >= 15:05（不再限定 15:05-15:10 的 5 分钟窗口）。
+ * 只要后端服务在跑，15:10 打开、晚上 20:00 打开，检测到当天快照不存在都会立刻补跑。
+ * 【不补历史日】行情接口只返回最新收盘数据；若第二天早上补昨天，会把今天的数据
+ * 标成昨天的快照，属于造假。所以只补「当天」，且必须由 >=15:05 这个时间闸门保证。
+ */
 export function shouldRunSnapshotNow(now = new Date(), holidays = new Set()) {
   if (computeMarketStatus(now, holidays) === 'holiday') return false; // 非交易日/周末/节假日跳过
   const mins = now.getHours() * 60 + now.getMinutes();
-  return mins >= 15 * 60 + 5 && mins <= 15 * 60 + 10;
+  return mins >= 15 * 60 + 5;
 }
 
 /**
@@ -265,15 +279,16 @@ export function startScheduler(getHolidays) {
     try {
       const now = new Date();
       if (!shouldRunSnapshotNow(now, getHolidays())) return;
-      const date = localDate(now);
-      if (await snapshotExists(date)) {
-        return; // 当日已落盘，避免重复
-      }
-      await runDailyWinRateSnapshot();
+      // 不再在 tick 内 await 全市场扫描：交给带并发锁的后台补跑入口。
+      // 旧实现无锁，任务跑 20 分钟期间每分钟都会再启动一次，最多可并发 5+ 个扫描。
+      const r = await triggerSnapshotBackfill(getHolidays());
+      if (r.started) console.log('[Scheduler] ' + r.reason + ' → ' + r.date);
     } catch (e) {
       console.error('[Scheduler] 检查/执行异常：', (e && e.message) || e);
     }
   };
+  // 启动即检查一次（不等第一个 60s 间隔）：错过窗口时只要开过软件就立刻补跑
+  void tick();
   setInterval(tick, 60_000);
-  console.log('[radar-server] 收盘快照定时器已就绪（每日 15:05-15:10 触发，落盘目录 data/snapshots/）');
+  console.log('[radar-server] 收盘快照定时器已就绪（交易日 15:05 后任意时刻，当日快照缺失即自动补跑）');
 }

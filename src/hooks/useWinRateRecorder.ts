@@ -672,10 +672,17 @@ export function useWinRateRecorder() {
       const end = new Date();
       const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
       const nowIso = new Date().toISOString();
+      const nowForPlaceholder = new Date();
+      const todayAfterClose =
+        nowForPlaceholder.getHours() * 60 + nowForPlaceholder.getMinutes() >= 15 * 60 + 5;
       while (cursor <= end) {
         if (isWeekday(cursor)) {
           const ds = localDate(cursor);
-          if (ds < todayStr && !snapSet.has(ds) && !existingDates.has(ds)) {
+          // 历史日：直接标缺失。今天：只在已过 15:05 且当日快照仍不存在时标，
+          // 避免把「还没收盘」误判成「软件没跑」；补跑成功后 snapSet 含今天，占位自动消失
+          // （展示层还会剔除「同日已有真实记录」的 snapshot_missing 行，双保险）。
+          const dateEligible = ds < todayStr || (ds === todayStr && todayAfterClose);
+          if (dateEligible && !snapSet.has(ds) && !existingDates.has(ds)) {
             createdAll.push(makePlaceholderRecord({
               date: ds,
               kind: 'snapshot_missing',
