@@ -28,6 +28,7 @@ import type {
   SellReason,
   PriceSource,
 } from '../domain/winrate';
+import { isPlaceholderRecord } from '../domain/winrate';
 
 export interface WinRateFilter {
   strategyId?: string;
@@ -270,7 +271,10 @@ export function computeWinRateStats(
   filter: WinRateFilter = {},
 ): WinRateStatsResult {
   const excludeAnomaly = filter.excludeAnomaly ?? true;
-  const filtered = filterWinRateRecords(records, filter);
+  // 占位记录（no_signal / snapshot_missing）仅供审计展示，不进任何统计口径：
+  // 否则会稀释 total / executableRate / ambiguityRate / anomalyCount，并在 byStrategy 里造出假战法分组。
+  // 注意：只在这里过滤；filterWinRateRecords 本身不改，UI 表格仍能看到占位行。
+  const filtered = filterWinRateRecords(records, filter).filter((r) => !isPlaceholderRecord(r));
 
   // 按战法分组
   const groups = new Map<string, WinRateRecord[]>();

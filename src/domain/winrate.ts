@@ -18,7 +18,8 @@ export type TradeStatus =
   | 'open' // 已记录、尚未平仓（模拟持有中）
   | 'closed' // 已平仓（收益率已结算，不可再编辑）
   | 'invalid' // 信号失效（v1 仅留接口，引擎后续判定）
-  | 'anomaly'; // 数据异常（如价格缺失），仅标记不计入正常胜率
+  | 'anomaly' // 数据异常（如价格缺失），仅标记不计入正常胜率
+  | 'empty'; // 空仓占位：当日全市场无符合该战法条件的标的（不参与统计/结算）
 
 /**
  * 买入时机：
@@ -107,7 +108,9 @@ export type WinRateAnomaly =
   | 'new_stock_no_limit_check' // 次新股，跳过一字板判定
   | 'backfilled' // 由补记录流程产生（非实时触发）
   | 'high_open_over_target1' // 买入当日开盘价已 ≥ 目标一，计划失效未成交
-  | 'param_changed'; // 参数版本变更
+  | 'param_changed' // 参数版本变更
+  | 'no_signal' // 当日全市场无符合该战法条件的标的（占位记录）
+  | 'snapshot_missing'; // 该交易日无收盘快照（自动任务未运行）
 
 /** 异常标注中文文案（唯一出处；逻辑层只用 key） */
 export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
@@ -125,6 +128,8 @@ export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
   new_stock_no_limit_check: '次新股不适用涨停判定',
   backfilled: '补记录',
   param_changed: '参数版本变更',
+  no_signal: '当日全市场无符合该战法条件的标的',
+  snapshot_missing: '快照缺失（当天软件未运行）',
   high_open_over_target1: '高开越过目标一(未成交)',
 };
 
@@ -238,6 +243,7 @@ export const TRADE_STATUS_LABELS: Record<TradeStatus, string> = {
   closed: '已平仓',
   invalid: '未成交',
   anomaly: '异常',
+  empty: '空仓',
 };
 
 /**
@@ -264,6 +270,7 @@ export function tradeViewCategory(record: WinRateRecord): TradeViewCategory {
 export const TRADE_VIEW_STATUS_LABELS: Record<TradeViewCategory, string> = {
   ...TRADE_STATUS_LABELS,
   recorded: '待买入',
+  empty: '无信号',
 };
 
 /** 信号强度来源（v1 取 StrategyHit.hitRatio，预留枚举便于后续切换） */
@@ -573,4 +580,84 @@ export interface WinRateSnapshot {
   priceSource: 'close';
   topN: number;
   strategies: WinRateSnapshotStrategy[];
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 占位记录（用户拍板）：区分「跑过但没票」与「当天软件没跑」，两者都仅供审计展示。
+//  - no_signal：status='empty'，每个 0 命中战法一条
+//  - snapshot_missing：status='anomaly'，每个无快照交易日一条
+// 共同约束：五价全 null、不进统计、不进结算（结算/监控只筛 status==='open'）。
+// ════════════════════════════════════════════════════════════════════════════
+
+export type PlaceholderKind = 'no_signal' | 'snapshot_missing';
+
+/** 返回占位类型；普通记录返回 null。展示层与统计层共用，避免两处口径漂移。 */
+export function placeholderKind(record: WinRateRecord): PlaceholderKind | null {
+  if (record.trade.status === 'empty') return 'no_signal';
+  if (record.trade.anomalies.includes('snapshot_missing')) return 'snapshot_missing';
+  return null;
+}
+
+export function isPlaceholderRecord(record: WinRateRecord): boolean {
+  return placeholderKind(record) !== null;
+}
+
+export interface MakePlaceholderOptions {
+  date: string;
+  kind: PlaceholderKind;
+  strategyId: string;
+  strategyName: string;
+  priceSource: PriceSource;
+  backfilled: boolean;
+  recordedAt: string;
+  buyTiming?: BuyTiming;
+  entryStyle?: EntryStyle;
+  holdDays?: { min: number; max: number } | null;
+  paramVersion?: string;
+}
+
+/** 构造占位记录：不写任何行情/买卖价，绝不用占位值冒充真实数据。 */
+export function makePlaceholderRecord(o: MakePlaceholderOptions): WinRateRecord {
+  const isNoSignal = o.kind === 'no_signal';
+  const trade: TradeRecord = {
+    buyDate: null,
+    buyPrice: null,
+    sellDate: null,
+    sellPrice: null,
+    holdDays: null,
+    returnPct: null,
+    sellReason: 'unknown',
+    status: isNoSignal ? 'empty' : 'anomaly',
+    anomalies: [o.kind],
+    backfilled: o.backfilled,
+  };
+  return {
+    id: genWinRateRecordId(),
+    date: o.date,
+    strategyId: o.strategyId,
+    strategyName: o.strategyName,
+    code: 'NONE',
+    name: isNoSignal ? '空仓' : '快照缺失',
+    determinismScore: null,
+    scoreFactors: null,
+    signalStrength: null,
+    signalStrengthSource: 'hitRatio',
+    recordedPrice: null,
+    buyLow: null,
+    buyHigh: null,
+    stop: null,
+    target1: null,
+    target2: null,
+    holdDays: o.holdDays ?? null,
+    tPlus1SellDate: null,
+    buyTiming: o.buyTiming,
+    entryStyle: o.entryStyle,
+    entryTargetDate: null,
+    paramVersion: o.paramVersion ?? '',
+    backfilled: o.backfilled,
+    recordedAt: o.recordedAt,
+    priceSource: o.priceSource,
+    insufficientHits: false,
+    trade,
+  };
 }

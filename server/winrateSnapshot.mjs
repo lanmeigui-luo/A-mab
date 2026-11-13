@@ -17,16 +17,22 @@
 
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { mkdir, writeFile, readFile, readdir, stat } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, stat, copyFile } from 'node:fs/promises';
 import { runScreen } from './screen.mjs';
 import { STRATEGY_DEFS } from './strategies/index.mjs';
 import { computeMarketStatus } from './marketStatus.mjs';
 
 // 运行时数据统一落 userData（Electron 注入 RADAR_DATA_DIR），避免装在 Program Files 时无写权限；
 // dev 未注入时回退到项目根 data/snapshots，保持原有行为。
+// 【兼容双读】LEGACY = 模块相对的项目根/安装目录（历史快照所在地）。
+// 主目录（userData）优先，LEGACY 兜底；两者相同时不重复读取。
+const LEGACY_SNAPSHOT_DIR = fileURLToPath(new URL('../data/snapshots', import.meta.url));
 const SNAPSHOT_DIR = process.env.RADAR_DATA_DIR
   ? path.join(process.env.RADAR_DATA_DIR, 'snapshots')
-  : fileURLToPath(new URL('../data/snapshots', import.meta.url));
+  : LEGACY_SNAPSHOT_DIR;
+const SNAPSHOT_DIRS = SNAPSHOT_DIR === LEGACY_SNAPSHOT_DIR
+  ? [SNAPSHOT_DIR]
+  : [SNAPSHOT_DIR, LEGACY_SNAPSHOT_DIR];
 const TOP_N = 5;
 
 /** 本地日期 YYYY-MM-DD（避免 UTC 偏移吞日期） */
@@ -40,7 +46,12 @@ function localDate(d = new Date()) {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function snapshotPath(date) {
-  return path.join(SNAPSHOT_DIR, date + '.json');
+  return path.join(SNAPSHOT_DIR, date + '.json'); // 写入始终用主目录
+}
+
+/** 读取候选路径：主目录优先，LEGACY 兜底 */
+function snapshotReadPaths(date) {
+  return SNAPSHOT_DIRS.map((d) => path.join(d, date + '.json'));
 }
 
 async function ensureSnapshotDir() {
@@ -78,37 +89,62 @@ function projectHit(hit) {
 
 /** 列出已落盘的快照日期（升序） */
 export async function listSnapshotDates() {
-  try {
-    const files = await readdir(SNAPSHOT_DIR);
-    return files
-      .filter((f) => DATE_RE.test(f.replace(/\.json$/, '')))
-      .map((f) => f.replace(/\.json$/, ''))
-      .sort();
-  } catch {
-    return [];
+  const found = new Set();
+  for (const dir of SNAPSHOT_DIRS) {
+    try {
+      const files = await readdir(dir);
+      for (const f of files) {
+        const d = f.replace(/\.json$/, '');
+        if (DATE_RE.test(d)) found.add(d);
+      }
+    } catch { /* 目录不存在：跳过，继续下一个 */ }
   }
+  return [...found].sort();
 }
 
 /** 读取单日快照；日期非法或文件不存在返回 null */
 export async function readSnapshot(date) {
   if (!DATE_RE.test(date || '')) return null;
-  try {
-    const raw = await readFile(snapshotPath(date), 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
+  for (const p of snapshotReadPaths(date)) {
+    try {
+      const raw = await readFile(p, 'utf8');
+      return JSON.parse(raw);
+    } catch { /* 该目录没有或解析失败 → 试下一个 */ }
   }
+  return null;
 }
 
 /** 某日快照是否已存在 */
 export async function snapshotExists(date) {
   if (!DATE_RE.test(date || '')) return false;
-  try {
-    await stat(snapshotPath(date));
-    return true;
-  } catch {
-    return false;
+  for (const p of snapshotReadPaths(date)) {
+    try { await stat(p); return true; } catch { /* 试下一个 */ }
   }
+  return false;
+}
+
+/**
+ * 一次性迁移：把 LEGACY 目录里主目录尚不存在的快照复制过去（不覆盖、不删除）。
+ * 解决「打包版改到 userData 后读不到历史快照」的数据目录分叉问题。
+ * 幂等：已存在的跳过；每次 server 启动调用一次。
+ */
+export async function migrateLegacySnapshots() {
+  const out = { copied: 0, skipped: 0, errors: [] };
+  if (SNAPSHOT_DIRS.length < 2) return out;
+  try { await ensureSnapshotDir(); }
+  catch (e) { out.errors.push(String((e && e.message) || e)); return out; }
+  try {
+    const files = await readdir(LEGACY_SNAPSHOT_DIR);
+    for (const f of files) {
+      const d = f.replace(/\.json$/, '');
+      if (!DATE_RE.test(d)) continue;
+      const dst = path.join(SNAPSHOT_DIR, f);
+      try { await stat(dst); out.skipped++; continue; } catch { /* 不存在 → 复制 */ }
+      try { await copyFile(path.join(LEGACY_SNAPSHOT_DIR, f), dst); out.copied++; }
+      catch (e) { out.errors.push(f + ': ' + String((e && e.message) || e)); }
+    }
+  } catch { /* LEGACY 目录不存在，无需迁移 */ }
+  return out;
 }
 
 /**
@@ -178,6 +214,14 @@ export function shouldRunSnapshotNow(now = new Date(), holidays = new Set()) {
  * getHolidays 为 getter，读取 index.mjs 异步加载后的最新节假日集合。
  */
 export function startScheduler(getHolidays) {
+  // 启动时迁移旧目录历史快照（幂等）；之后 listSnapshotDates / readSnapshot 天然双读兜底。
+  migrateLegacySnapshots()
+    .then((r) => {
+      if (r.copied > 0 || r.errors.length) {
+        console.log('[Scheduler] 历史快照迁移：新增 ' + r.copied + ' 个，跳过 ' + r.skipped + ' 个，错误 ' + r.errors.length + ' 条');
+      }
+    })
+    .catch((e) => console.warn('[Scheduler] 快照迁移失败（不影响启动）: ' + ((e && e.message) || e)));
   const tick = async () => {
     try {
       const now = new Date();

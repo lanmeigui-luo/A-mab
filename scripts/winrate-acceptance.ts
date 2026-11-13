@@ -22,6 +22,10 @@ import {
   canSellToday,
   nextTradingDateGuess,
   ENTRY_STYLE_LABELS,
+  ANOMALY_LABELS,
+  makePlaceholderRecord,
+  placeholderKind,
+  isPlaceholderRecord,
 } from '../src/domain/winrate';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
@@ -1749,6 +1753,83 @@ function runEntryEngineAssertion() {
   }
 }
 
+function runPlaceholderAssertion() {
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 11, target2: 12 };
+
+  section('占位记录 P1：no_signal 形状（status=empty / 五价全 null / code=NONE）');
+  const empty = makePlaceholderRecord({
+    date: '2026-01-05', kind: 'no_signal', strategyId: 'trend-break', strategyName: '趋势突破',
+    priceSource: 'close', backfilled: false, recordedAt: '2026-01-05T15:05:00.000Z',
+  });
+  check(empty.trade.status === 'empty', 'status=empty（独立状态，绝不复用 invalid）');
+  check(empty.trade.anomalies.includes('no_signal'), 'anomaly=no_signal');
+  check(empty.code === 'NONE' && empty.name === '空仓', 'code/name 占位值');
+  check(
+    [empty.buyLow, empty.buyHigh, empty.stop, empty.target1, empty.target2, empty.recordedPrice]
+      .every((v) => v === null),
+    '买入区间/止损/目标/记录价全 null',
+  );
+  check(
+    [empty.trade.buyPrice, empty.trade.sellPrice, empty.trade.returnPct].every((v) => v === null),
+    '买卖价/收益率全 null（表格显示 —）',
+  );
+  check(ANOMALY_LABELS.no_signal === '当日全市场无符合该战法条件的标的', 'no_signal 中文说明');
+  check(TRADE_VIEW_STATUS_LABELS.empty === '无信号', '状态列文案=无信号');
+
+  section('占位记录 P2：snapshot_missing 形状（当天软件未运行）');
+  const missing = makePlaceholderRecord({
+    date: '2026-01-06', kind: 'snapshot_missing', strategyId: '__snapshot_missing__',
+    strategyName: '系统', priceSource: 'close', backfilled: true,
+    recordedAt: '2026-01-07T09:00:00.000Z',
+  });
+  check(missing.trade.status === 'anomaly', 'status=anomaly');
+  check(missing.trade.anomalies.includes('snapshot_missing'), 'anomaly=snapshot_missing');
+  check(ANOMALY_LABELS.snapshot_missing === '快照缺失（当天软件未运行）', '文案明确「未运行」');
+  check(missing.backfilled === true, 'backfilled=true（回看窗口内补记）');
+
+  section('占位记录 P3：分类与识别（tradeViewCategory 口径不变）');
+  check(tradeViewCategory(empty) === 'empty', 'empty 独立分类，不误归 recorded');
+  check(placeholderKind(empty) === 'no_signal', 'placeholderKind(no_signal)');
+  check(placeholderKind(missing) === 'snapshot_missing', 'placeholderKind(snapshot_missing)');
+  const normal = makeRec({ date: '2026-01-05', ...plan });
+  check(!isPlaceholderRecord(normal), '普通记录非占位');
+  check(placeholderKind(normal) === null, '普通记录 placeholderKind=null');
+
+  section('占位记录 P4：G5 互斥完备性加入占位后仍成立');
+  {
+    const b = makeRec({ date: '2026-01-02', ...plan });
+    b.trade = { ...b.trade, buyPrice: 10.2 };
+    const c = makeRec({ date: '2026-01-03', ...plan });
+    c.trade = { ...c.trade, status: 'invalid' };
+    const all = [normal, b, c, empty, missing];
+    const openAll = all.filter((r) => r.trade.status === 'open');
+    const recorded = all.filter((r) => tradeViewCategory(r) === 'recorded');
+    const holding = all.filter((r) => tradeViewCategory(r) === 'open');
+    check(
+      recorded.length + holding.length === openAll.length,
+      'recorded+持仓中 = 原 open 集合 (' + recorded.length + '+' + holding.length + '=' + openAll.length + ')',
+    );
+    check(recorded.every((r) => !holding.includes(r)), '两类无重叠');
+  }
+
+  section('占位记录 P5：统计层完全剔除占位（total / 执行率 / 胜率分母 / anomalyCount）');
+  {
+    const closedRec = makeRec({ date: '2026-01-04', ...plan });
+    closedRec.trade = { ...closedRec.trade, status: 'closed', buyPrice: 10, sellPrice: 11, returnPct: 10 };
+    const invalidRec = makeRec({ date: '2026-01-05', ...plan });
+    invalidRec.trade = { ...invalidRec.trade, status: 'invalid' };
+    const base = [closedRec, invalidRec];
+    const withPh = [...base, empty, missing];
+    const s0 = computeWinRateStats(base, { excludeAnomaly: true }).byStrategy[0];
+    const s1 = computeWinRateStats(withPh, { excludeAnomaly: true }).byStrategy[0];
+    check(s1.total === s0.total, 'total 不变 (' + s0.total + ' → ' + s1.total + ')');
+    check(s1.closed === s0.closed && s1.closed === 1, '胜率有效笔数不变（仅 closed）');
+    check(s1.executableRate === s0.executableRate, '买入执行率不变');
+    check(s1.anomalyCount === s0.anomalyCount, 'anomalyCount 不变');
+    check(s1.ambiguityRate === s0.ambiguityRate, '歧义率不变');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1766,6 +1847,7 @@ async function main() {
   await runMinuteAssertions();
   runMinuteStatsAssertion();
   runEntryEngineAssertion();
+  runPlaceholderAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

@@ -8,6 +8,8 @@ import {
   tradeRuleNote,
   tradeInvalidNote,
   tradeViewCategory,
+  placeholderKind,
+  isPlaceholderRecord,
   type TradeViewCategory,
 } from '../domain/winrate';
 
@@ -92,8 +94,21 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
 
   const rows = useMemo(() => {
     let r = records;
-    // 按视图分类筛选：open 且 buyPrice==null 归「已记录」，「持仓中」严格为已买入未卖出
-    if (statusFilter !== 'all') r = r.filter((x) => tradeViewCategory(x) === statusFilter);
+    // 按视图分类筛选：open 且 buyPrice==null 归「已记录」，「持仓中」严格为已买入未卖出。
+    // 「已记录」Tab 额外纳入两类审计占位记录；tradeViewCategory 本身口径不变（G5 零回归）。
+    if (statusFilter !== 'all') {
+      r = r.filter((x) => {
+        if (statusFilter === 'recorded' && isPlaceholderRecord(x)) return true;
+        return tradeViewCategory(x) === statusFilter;
+      });
+    }
+    // 若某日已有真实记录（快照事后补跑成功），剔除该日的 snapshot_missing 占位，避免状态矛盾。
+    const realDates = new Set(
+      records.filter((x) => !isPlaceholderRecord(x)).map((x) => x.date),
+    );
+    r = r.filter(
+      (x) => !(placeholderKind(x) === 'snapshot_missing' && realDates.has(x.date)),
+    );
     const arr = [...r];
     arr.sort((a, b) => {
       let av: number | string;
@@ -225,9 +240,11 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                     >
                       {ret == null ? '—' : `${ret.toFixed(2)}%`}
                     </td>
-                    <td>{SELL_REASON_LABELS[r.trade.sellReason]}</td>
+                    <td>{placeholderKind(r) ? '—' : SELL_REASON_LABELS[r.trade.sellReason]}</td>
                     <td className="wr-rule-note">
                       {(() => {
+                        const pk = placeholderKind(r);
+                        if (pk) return ANOMALY_LABELS[pk];
                         const invalid = tradeInvalidNote(r);
                         const defer = deferredNote(r);
                         if (invalid) return invalid + defer;
@@ -239,7 +256,11 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                       <span className={`wr-status wr-status-${category}`}>
                         {/* 盘中 14:50 未成交为软标记（status 仍 open，晚间日K兜底可翻案），
                             此处单独展示「未成交（待复核）」让状态流转可见；不改 tradeViewCategory 分类口径 */}
-                        {r.trade.intradayEntryResolved === 'unfilled'
+                        {placeholderKind(r) === 'no_signal'
+                          ? '无信号'
+                          : placeholderKind(r) === 'snapshot_missing'
+                          ? '快照缺失（当天软件未运行）'
+                          : r.trade.intradayEntryResolved === 'unfilled'
                           ? '未成交（待复核）'
                           : TRADE_VIEW_STATUS_LABELS[category]}
                       </span>

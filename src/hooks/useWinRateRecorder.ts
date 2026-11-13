@@ -55,6 +55,8 @@ import {
 import {
   genWinRateRecordId,
   nextTradingDateGuess,
+  makePlaceholderRecord,
+  isPlaceholderRecord,
   type WinRateRecord,
   type TradeRecord,
   type WinRateAnomaly,
@@ -169,7 +171,27 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
   for (const strat of snapshot.strategies) {
     const cfg = getWinRateConfig(strat.strategyId);
     if (!cfg) continue; // 后端有但前端配置未映射的战法：跳过，不写脏数据
-    for (const h of strat.hits) {
+    if ((strat.hits ?? []).length === 0) {
+      // 决策 4「历史不回溯」：仅当日快照为 0 命中的战法生成 no_signal 占位；
+      // 历史快照的 0 命中保持原样（不补写、不改历史口径）。
+      if (!isHistorical) {
+        created.push(makePlaceholderRecord({
+          date: snapshot.date,
+          kind: 'no_signal',
+          strategyId: strat.strategyId,
+          strategyName: strat.strategyName ?? cfg.strategyName,
+          priceSource: 'close',
+          backfilled: false,
+          recordedAt,
+          buyTiming: cfg.buyTiming,
+          entryStyle: cfg.entryStyle,
+          holdDays: cfg.holdDays,
+          paramVersion: cfg.paramVersion,
+        }));
+      }
+      continue;
+    }
+    for (const h of strat.hits ?? []) {
       // 仅行情缺失（停牌/退市/无报价）判不可买入；涨停票照常生成 open 记录，
       // 交由结算侧 simulateTrade 按 buyTiming 判定封板/一字板/高开未成交。
       const unbuyable = h.price == null;
@@ -366,6 +388,23 @@ export function useWinRateRecorder() {
 
         const recordedAt = new Date().toISOString();
         const created: WinRateRecord[] = [];
+        // 仅在「确认跑过且 0 命中」时生成占位：screen.ok=false / 抛异常走上面的错误分支，
+        // 绝不把「接口挂了 / 任务没跑」伪装成「系统正常、当天没票」。
+        if (matched.length === 0) {
+          created.push(makePlaceholderRecord({
+            date,
+            kind: 'no_signal',
+            strategyId: cfg.strategyId,
+            strategyName: cfg.strategyName,
+            priceSource: 'intraday_late',
+            backfilled: isBackfill,
+            recordedAt,
+            buyTiming: cfg.buyTiming,
+            entryStyle: cfg.entryStyle,
+            holdDays: cfg.holdDays,
+            paramVersion: cfg.paramVersion,
+          }));
+        }
         for (const hit of top) {
           // 仅行情缺失（停牌/退市/无报价）判不可买入；涨停票一律生成 open 记录，
           // 交由结算侧 simulateTrade 按 buyTiming 判定（t_close 封板 / t_next_open 一字板、高开）。
@@ -595,32 +634,66 @@ export function useWinRateRecorder() {
     const out: { dates: string[]; added: number } = { dates: [], added: 0 };
     try {
       const datesRes = await marketApi.winrateSnapshotDates();
-      if (!datesRes.ok || !Array.isArray(datesRes.dates) || !datesRes.dates.length) return out;
-      const existingDates = new Set(recordsRef.current.map((r) => r.date));
-      const missing = datesRes.dates.filter((d) => !existingDates.has(d));
-      if (!missing.length) return out;
+      // 后端已实现「userData 优先 + 项目根兜底」双读；空列表不再直接返回，仍需检测快照缺失日
+      const snapshotDates = datesRes.ok && Array.isArray(datesRes.dates) ? datesRes.dates : [];
       const todayStr = localDate();
+      const recordsNow = recordsRef.current;
+      // 关键：existingDates 只认「真实记录」。占位记录不算，否则后续快照补出真实命中时
+      // 该日会被跳过、永远补不进来（漏票）。
+      const existingDates = new Set(
+        recordsNow.filter((r) => !isPlaceholderRecord(r)).map((r) => r.date),
+      );
+      const existingKeys = new Set(
+        recordsNow.map((r) => r.date + ':' + r.strategyId + ':' + r.code),
+      );
+      const createdAll: WinRateRecord[] = [];
+
+      // (1) 快照缺失日：回看窗口内的工作日，无快照、无真实记录、且非今天 → 每天一条 snapshot_missing
+      const snapSet = new Set(snapshotDates);
+      const start = new Date();
+      start.setDate(start.getDate() - PENDING_LOOKBACK_DAYS);
+      const end = new Date();
+      const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+      const nowIso = new Date().toISOString();
+      while (cursor <= end) {
+        if (isWeekday(cursor)) {
+          const ds = localDate(cursor);
+          if (ds < todayStr && !snapSet.has(ds) && !existingDates.has(ds)) {
+            createdAll.push(makePlaceholderRecord({
+              date: ds,
+              kind: 'snapshot_missing',
+              strategyId: '__snapshot_missing__',
+              strategyName: '系统',
+              priceSource: 'close',
+              backfilled: true,
+              recordedAt: nowIso,
+            }));
+          }
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+
+      // (2) 有快照但本地无真实记录的日期 → 拉快照，生成真实记录 / 当日 no_signal
+      const missing = snapshotDates.filter((d) => !existingDates.has(d));
       for (const d of missing) {
         try {
           const snapRes = await marketApi.winrateSnapshot(d);
           if (!snapRes.ok || !('snapshot' in snapRes) || !snapRes.snapshot) continue;
-          const isHistorical = d !== todayStr; // 历史缺失日（非当日）→ backfilled=true
-          let recs = recordsFromSnapshot(snapRes.snapshot, isHistorical);
-          // 按 (date, strategyId, code) 去重，避免同日同战法同股票重复（镜像 recordStrategy）
-          const existingKeys = new Set(
-            recordsRef.current
-              .filter((r) => r.date === d)
-              .map((r) => r.strategyId + ':' + r.code),
-          );
-          recs = recs.filter((r) => !existingKeys.has(r.strategyId + ':' + r.code));
-          if (recs.length) {
-            const { added } = appendRecords(recs);
-            out.added += added;
-            if (added > 0) out.dates.push(d);
-          }
+          const isHistorical = d !== todayStr;
+          createdAll.push(...recordsFromSnapshot(snapRes.snapshot, isHistorical));
         } catch {
           /* 单日快照失败不影响其它日 */
         }
+      }
+
+      // (3) 统一按 (date, strategyId, code) 去重后写入；占位 code='NONE' 天然唯一
+      const fresh = createdAll.filter(
+        (r) => !existingKeys.has(r.date + ':' + r.strategyId + ':' + r.code),
+      );
+      if (fresh.length) {
+        const { added } = appendRecords(fresh);
+        out.added += added;
+        out.dates = [...new Set(fresh.map((r) => r.date))];
       }
     } catch {
       /* 后端不可达等：保持静默，不影响应用打开 */
