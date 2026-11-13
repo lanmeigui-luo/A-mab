@@ -9,7 +9,9 @@
 //     · tdx-server / sidecar-server 用固定端口（tdx=8789、sidecar=8788）拉起，
 //       主进程轮询其 /health 接口确认就绪后，注入 node-api 的 TDX/SIDECAR 环境变量。
 //       （早期版本用 --port 0 + 读取 stdout 的 PORT=，但 Windows 下 Python pipe 块缓冲导致回写丢失，已弃用。）
-// - tdx-server 为主源，必拉起；sidecar-server 为补充源，best-effort，失败仅横幅不阻塞。
+// - tdx-server 为【可选主源】：拉起失败 / health 超时 / 取不到数一律静默降级腾讯·新浪，
+//   不弹错误窗、不阻止主窗口启动；sidecar-server 同为 best-effort。
+// - 运行时数据统一落 userData（RADAR_DATA_DIR），避免装在 Program Files 时只读。
 //   精简版（extraResources 不含 sidecar-server.exe）自动跳过。
 // - node-api 跑在主进程内（Electron 即 Node≥20），无需独立 Node 运行时。
 // - 关闭窗口 → taskkill 杀掉两个 Python 子进程树，主进程退出即 node-api 退出。
@@ -351,6 +353,17 @@ async function killChildren() {
 async function startup() {
   ensureDirs();
 
+  // 运行时数据统一落 %APPDATA%/astock-radar/data（node-api import 时读取该环境变量）。
+  // 收盘快照 / 节假日表据此定位，绝不写安装目录（Program Files 普通用户无写权限）。
+  const RUNTIME_DATA_DIR = path.join(USER_DATA, "data");
+  try {
+    fs.mkdirSync(path.join(RUNTIME_DATA_DIR, "snapshots"), { recursive: true });
+    log("[data] 运行时数据目录: " + RUNTIME_DATA_DIR);
+  } catch (e) {
+    log("[data] 创建运行时数据目录失败: " + (e && e.message));
+  }
+  process.env.RADAR_DATA_DIR = RUNTIME_DATA_DIR;
+
   // 生产态：前端构建产物 dist 经 electron-builder 作为 extraResource 落入 resources/dist，
   // 由 node-api 作为静态根托管（SPA fallback）。dev 不设置，node-api 跳过静态托管走 vite dev server。
   // 具体由 electron-builder.yml 的 extraResources 保证 dist 到位（3b 范围）。
@@ -364,14 +377,18 @@ async function startup() {
   await savePorts({ api: apiPort });
   process.env.PORT = String(apiPort);
 
-  // 2) 主源 tdx（必起）：固定端口 8789 + 轮询 /health；超时 → 错误窗（含诊断）
+  // 2) 通达信主源（【可选】，静默降级）：固定端口 8789 + 轮询 /health。
+  //    进程起不来 / health 超时 / 取不到数，都不弹错误窗、不阻止主窗口启动；
+  //    置 TDX_DISABLED=1 让 node-api 直接走腾讯·新浪降级链路，避免每次行情请求白等一次连接。
   const TDX_TIMEOUT_MS = 15000;
   const tdxResult = await spawnFixedPort(SERVICES[0], 8789, TDX_TIMEOUT_MS);
   if (!tdxResult.ok) {
-    showErrorWindow('主数据源启动失败', `通达信行情服务（tdx-server）${Math.round(TDX_TIMEOUT_MS / 1000)} 秒内 health 探测超时（端口 8789）。详见下方诊断信息，无需打开日志文件。`, tdxResult);
-    return;
+    log("[tdx] 可选主源未就绪（" + (tdxResult.reason || "health 超时") + "），静默降级腾讯/新浪，不阻塞启动");
+    process.env.TDX_DISABLED = "1";
+  } else {
+    log("[tdx] 可选主源已就绪 @8789");
+    process.env.TDX = 'http://127.0.0.1:8789';
   }
-  process.env.TDX = 'http://127.0.0.1:8789';
 
   // 3) 补充源 sidecar（best-effort）：固定端口 8788 + 轮询 /health；失败仅横幅不阻塞。
   //    · resolveService 返回 null = extraResources 与源码均缺失 = 精简版 → 显式置 SIDECAR_DISABLED=1

@@ -328,8 +328,11 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p === '/api/health') {
-      // 通达信是主数据源，每次 health 都真实探测一次，不缓存旧结论
-      const tdxLive = await tdx.health().catch(() => ({ ok: false, reason: 'tdx 服务不可达' }));
+      // Node 服务起来即健康：HTTP 恒 200 / ok 恒 true，与数据源可用性无关。
+      // TDX 只是附带诊断，探测加 2s 上限，绝不阻塞 health；失败由 getQuotes 静默降级腾讯·新浪。
+      const tdxProbe = tdx.health().catch(() => ({ ok: false, reason: 'tdx 服务不可达' }));
+      const tdxDeadline = new Promise((r) => setTimeout(() => r({ ok: false, reason: 'tdx 探测超时（已降级）' }), 2000));
+      const tdxLive = await Promise.race([tdxProbe, tdxDeadline]);
       const tdxStats = tdx.channelStats();
       const sc = await sidecarHealth();
       const nowIso = new Date().toISOString();

@@ -22,7 +22,11 @@ import { runScreen } from './screen.mjs';
 import { STRATEGY_DEFS } from './strategies/index.mjs';
 import { computeMarketStatus } from './marketStatus.mjs';
 
-const SNAPSHOT_DIR = fileURLToPath(new URL('../data/snapshots', import.meta.url));
+// 运行时数据统一落 userData（Electron 注入 RADAR_DATA_DIR），避免装在 Program Files 时无写权限；
+// dev 未注入时回退到项目根 data/snapshots，保持原有行为。
+const SNAPSHOT_DIR = process.env.RADAR_DATA_DIR
+  ? path.join(process.env.RADAR_DATA_DIR, 'snapshots')
+  : fileURLToPath(new URL('../data/snapshots', import.meta.url));
 const TOP_N = 5;
 
 /** 本地日期 YYYY-MM-DD（避免 UTC 偏移吞日期） */

@@ -14,6 +14,8 @@
  */
 
 const TDX = process.env.TDX || 'http://127.0.0.1:8789';
+/** Electron 检测到可选主源未就绪时注入：直接走降级链路，不白等一次连接 */
+const DISABLED = process.env.TDX_DISABLED === '1';
 
 /** 通道健康统计，供 /api/health 展示 */
 const stats = { ok: 0, fail: 0, lastMs: null, lastError: null };
@@ -29,6 +31,7 @@ function noteFail(msg) {
 }
 
 async function getJson(path, ms) {
+  if (DISABLED) return { ok: false, reason: '通达信主源已禁用（静默降级腾讯/新浪）' };
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
   const t0 = Date.now();
