@@ -65,6 +65,7 @@ import {
 } from '../domain/winrate';
 import { useWinRateStore, getLiveRecords, applyMinuteResolution, registerMinuteResolver } from './useWinRateStore';
 import { isWithinRecordWindow, isWeekday, MARKET_CLOSE_MINS } from '../lib/tradingTime';
+import { dedupeRecords } from '../lib/record-dedupe';
 import { toFullCode } from '../lib/full-code';
 
 const RECORD_TOP_N = 5;
@@ -246,7 +247,8 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
       created.push(rec);
     }
   }
-  return created;
+  // 防御：同一快照内若因数据源抖动出现同 (战法, 股票) 重复，入库前按业务键去重。
+  return dedupeRecords(created);
 }
 
 /**

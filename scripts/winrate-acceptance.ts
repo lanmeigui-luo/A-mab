@@ -29,6 +29,7 @@ import {
 } from '../src/domain/winrate';
 import { toFullCode, inferMarket } from '../src/lib/full-code';
 import * as fs from 'fs';
+import { dedupeRecords, recordBusinessKey } from '../src/lib/record-dedupe';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -1940,6 +1941,43 @@ function runSnapshotCompletenessLogicAssertion() {
   check(!isComplete([], required), '空快照 → 不完整');
 }
 
+function runRecordDedupeAssertion() {
+  const mk = (date: string, sid: string, code: string, id: string) => ({ id, date, strategyId: sid, code });
+
+  section('记录去重 D1：同一 (日期, 战法, 股票) 只保留一条');
+  {
+    const dup = [mk('2026-11-16', 'ma-bull', '600000', 'a'), mk('2026-11-16', 'ma-bull', '600000', 'b')];
+    const out = dedupeRecords(dup);
+    check(out.length === 1, '重复业务键 → 1 条（实际 ' + out.length + '）');
+    check(out[0].id === 'a', '保留第一次出现的那条');
+    check(recordBusinessKey(dup[0]) === '2026-11-16:ma-bull:600000', '业务键格式 = 日期:战法:股票');
+  }
+
+  section('记录去重 D2：不同股票 / 不同战法 / 不同日期都必须保留');
+  {
+    const multi = [
+      mk('2026-11-16', 'ma-bull', '600000', '1'),
+      mk('2026-11-16', 'ma-bull', '000001', '2'),
+      mk('2026-11-16', 'dragon', '600000', '3'),
+      mk('2026-11-15', 'ma-bull', '600000', '4'),
+    ];
+    check(dedupeRecords(multi).length === 4, '4 条互不相同 → 全部保留');
+  }
+
+  section('记录去重 D3：空仓占位 NONE 同天同战法只允许一条');
+  {
+    const none = [
+      mk('2026-11-16', 'overnight-hold', 'NONE', 'x'),
+      mk('2026-11-16', 'overnight-hold', 'NONE', 'y'),
+      mk('2026-11-16', 'board-advance', 'NONE', 'z'),
+    ];
+    const out = dedupeRecords(none);
+    check(out.length === 2, '同战法 NONE 去重、不同战法保留（实际 ' + out.length + '）');
+    check(out[0].id === 'x', '保留第一条 NONE');
+    check(recordBusinessKey(none[0]) === '2026-11-16:overnight-hold:NONE', 'NONE 业务键正确');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1962,6 +2000,7 @@ async function main() {
   runEntryPriceHintAssertion();
   runSnapshotCompletenessAssertion();
   runSnapshotCompletenessLogicAssertion();
+  runRecordDedupeAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

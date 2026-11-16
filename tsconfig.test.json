@@ -22,6 +22,7 @@
     "src/lib/winrate-stats.ts",
     "src/lib/winrate-minute.ts",
     "src/lib/full-code.ts",
+    "src/lib/record-dedupe.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

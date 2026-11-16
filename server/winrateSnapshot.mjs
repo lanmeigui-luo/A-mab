@@ -212,12 +212,40 @@ async function runSnapshotForStrategies(ids, date) {
 }
 
 /** 合并写入：读已有快照，按 strategyId 替换/追加，绝不整份覆盖 */
+let mergeChain = Promise.resolve();
+
+/**
+ * 合并写入（Upsert + 业务键去重 + 串行）。
+ * - Upsert：按 strategyId 整组替换 hits，绝不做数组拼接（避免同一战法出现两份）。
+ * - 战法内去重：按 code 去重（同战法同日同票只留一条；空仓 NONE 也只留一条）。
+ * - 串行：14:57 复核与 15:05 全量可能同时触发，读-改-写必须排队，否则相互覆盖或重复。
+ */
 export async function mergeSnapshotForStrategies(date, strategiesOut, extra = {}) {
+  const task = mergeChain.then(() => doMergeSnapshotForStrategies(date, strategiesOut, extra));
+  mergeChain = task.then(() => undefined, () => undefined);
+  return task;
+}
+
+async function doMergeSnapshotForStrategies(date, strategiesOut, extra = {}) {
   const existing = (await readSnapshot(date)) || {
     date, generatedAt: new Date().toISOString(), priceSource: 'close', topN: TOP_N, strategies: [],
   };
   const map = new Map((existing.strategies || []).map((x) => [x.strategyId, x]));
-  for (const x of strategiesOut) map.set(x.strategyId, x);
+  for (const item of strategiesOut) {
+    if (!item || !item.strategyId) continue;
+    let next = item;
+    if (Array.isArray(item.hits)) {
+      const seen = new Set();
+      const hits = item.hits.filter((h) => {
+        const k = String(h?.code || h?.fullCode || '');
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      next = { ...item, hits };
+    }
+    map.set(next.strategyId, next); // Upsert：整组替换，不拼接
+  }
   const merged = { ...existing, ...extra, date, generatedAt: new Date().toISOString(), strategies: [...map.values()] };
   await ensureSnapshotDir();
   await writeFile(snapshotPath(date), JSON.stringify(merged, null, 2), 'utf8');

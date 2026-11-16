@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import type { WinRateRecord, TradeRecord, MinuteResolveMeta } from '../domain/winrate';
+import { dedupeRecords, recordBusinessKey } from '../lib/record-dedupe';
 
 const STORAGE_KEY = 'radar.winrate.v1';
 const SCHEMA_VERSION = 1;
@@ -79,11 +80,21 @@ function read(): WinRateRecord[] {
     const p = JSON.parse(raw) as Persisted;
     if (!p || p.version !== SCHEMA_VERSION || !Array.isArray(p.records)) return [];
     // 仅保留结构合法、含 id / code / strategyId 的记录；旧数据补默认字段并迁移旧规则记录
-    const loaded = p.records
+    const loadedRaw = p.records
       .filter(
         (r) => r && typeof r.id === 'string' && typeof r.code === 'string' && typeof r.strategyId === 'string',
       )
       .map((r) => migrateWinRateRecord(r));
+    // 【启动清理】同一 (日期, 战法, 股票) 只保留第一条。历史 bug：StrictMode 双调用 +
+    // appendRecords 仅按随机 id 去重 → 同业务键写入两条内容相同、id 不同的记录。
+    const loaded = dedupeRecords(loadedRaw);
+    if (loaded.length !== loadedRaw.length) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: SCHEMA_VERSION, records: loaded }));
+      } catch {
+        /* 存储不可用：仅内存去重，不阻断加载 */
+      }
+    }
     // 启动扫描：发现 pending 分钟消解记录则触发一次重试（非交易时段打开应用顺带重试；非定时器）
     if (loaded.some((r) => r.trade.minuteResolve?.status === 'pending')) scheduleStartupPendingRetry();
     return loaded;
@@ -195,8 +206,19 @@ export function useWinRateStore() {
   /** 仅追加：批量新增记录，不修改已有记录（id 去重） */
   const appendRecords = useCallback((incoming: WinRateRecord[]): { added: number } => {
     if (!Array.isArray(incoming) || incoming.length === 0) return { added: 0 };
-    const existing = new Set(state.map((r) => r.id));
-    const fresh = incoming.filter((r) => r && typeof r.id === 'string' && !existing.has(r.id));
+    const existingIds = new Set(state.map((r) => r.id));
+    // 【双重去重】id 之外必须再按业务键拦一层：记录 id 是随机新值，StrictMode 双调用 /
+    // 并发补拉时仅按 id 判断会把「同一天同战法同股票」写两遍（2026-11-16 实测事故）。
+    const existingBiz = new Set(state.map((r) => recordBusinessKey(r)));
+    const fresh: WinRateRecord[] = [];
+    for (const r of incoming) {
+      if (!r || typeof r.id !== 'string') continue;
+      if (existingIds.has(r.id)) continue;
+      const k = recordBusinessKey(r);
+      if (existingBiz.has(k)) continue;
+      existingBiz.add(k); // 同一批 incoming 内部也去重
+      fresh.push(r);
+    }
     if (fresh.length === 0) return { added: 0 };
     setRecords([...state, ...fresh]);
     return { added: fresh.length };
