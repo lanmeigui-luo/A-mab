@@ -28,6 +28,7 @@ import {
   isPlaceholderRecord,
 } from '../src/domain/winrate';
 import { toFullCode, inferMarket } from '../src/lib/full-code';
+import * as fs from 'fs';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -1909,6 +1910,36 @@ function runEntryPriceHintAssertion() {
   }
 }
 
+function runSnapshotCompletenessAssertion() {
+  section('快照完整性 F1：源码防回归（完整性判定而非文件存在）');
+  const src = fs.readFileSync('server/winrateSnapshot.mjs', 'utf8');
+  check(src.includes('export async function isSnapshotComplete'), 'isSnapshotComplete 已导出');
+  check(src.includes('available !== false && !x.skipFullSnapshot'),
+        '完整性口径 = available!==false && !skipFullSnapshot');
+  const backfill = src.slice(
+    src.indexOf('export async function triggerSnapshotBackfill'),
+    src.indexOf('export function shouldRunSnapshotNow'),
+  );
+  check(backfill.includes('isSnapshotComplete(date)'), '补跑入口用完整性判定');
+  check(!backfill.includes('snapshotExists(date)'), '补跑入口不再用「文件存在」判定');
+  check(src.includes('mergeSnapshotForStrategies(date, strategiesOut'),
+        '全量落盘走合并写入（保留 14:55 数据）');
+}
+
+function runSnapshotCompletenessLogicAssertion() {
+  section('快照完整性 F2：部分快照 / 完整快照的纯集合判定');
+  // 与 server 侧同口径的纯逻辑镜像：所有必跑战法都出现才算完整。
+  const required = ['first-board', 'board-advance', 'trend-break', 'ma-bull', 'dragon',
+                    'pullback-buy', 'dragon-return', 'oversold-bounce', 'ultra-short', 'volume-price-up'];
+  const partial = ['overnight-hold'];
+  const complete = [...partial, ...required];
+  const isComplete = (present: string[], req: string[]) => req.every((id) => present.includes(id));
+  check(!isComplete(partial, required), '仅隔夜战法 → 不完整，必须补跑');
+  check(!isComplete(required, required) === false, '仅 10 个战法（无隔夜）→ 完整');
+  check(isComplete(complete, required), '10+1 全覆盖 → 完整，跳过');
+  check(!isComplete([], required), '空快照 → 不完整');
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1929,6 +1960,8 @@ async function main() {
   runPlaceholderAssertion();
   runFullCodeAssertion();
   runEntryPriceHintAssertion();
+  runSnapshotCompletenessAssertion();
+  runSnapshotCompletenessLogicAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

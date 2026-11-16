@@ -10,7 +10,7 @@
     "dev": "concurrently -n tdx,sidecar,server,web -c green,yellow,cyan,magenta \"npm:dev:tdx\" \"npm:dev:sidecar\" \"npm:dev:server\" \"npm:dev:web\"",
     "dev:tdx": "node scripts/run-tdx.mjs",
     "dev:sidecar": "node scripts/run-sidecar.mjs",
-    "dev:server": "node server/index.mjs",
+    "dev:server": "node scripts/dev-server.mjs",
     "dev:web": "vite",
     "build": "tsc -b && vite build",
     "build:win": "electron-builder --win",

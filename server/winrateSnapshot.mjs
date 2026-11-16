@@ -231,6 +231,21 @@ export async function snapshotHasStrategy(date, strategyId) {
 }
 
 /**
+ * 【完整性判定】快照是否覆盖所有「应由 15:05 全量任务生成」的战法。
+ * 必须与「文件存在」严格区分：14:57 会先写入只含隔夜战法的部分快照，
+ * 若把「文件存在」当成「任务完成」，15:05 的全量补跑会被永久跳过（2026-11-16 实测事故）。
+ * 判定口径：所有 available!==false && !skipFullSnapshot 的战法都必须有条目。
+ * 注意：skipFullSnapshot 的战法（如 14:55 的隔夜持股）由专用通道负责，不计入完整性。
+ */
+export async function isSnapshotComplete(date) {
+  const snap = await readSnapshot(date);
+  if (!snap || !Array.isArray(snap.strategies)) return false;
+  const present = new Set(snap.strategies.map((x) => x.strategyId));
+  const required = STRATEGY_DEFS.filter((x) => x.available !== false && !x.skipFullSnapshot);
+  return required.every((x) => present.has(x.id));
+}
+
+/**
  * 执行当日收盘快照落盘（口径 A 核心）。
  * 遍历启用战法，逐战法调 runScreen 取前 5，组合写 JSON。
  * 返回落盘结果供日志/调用方使用。
@@ -292,13 +307,19 @@ export async function runDailyWinRateSnapshot() {
     return { date, ok: false, strategies: 0, hits: 0, file: null, errors };
   }
 
-  await writeFile(snapshotPath(date), JSON.stringify(snapshot, null, 2), 'utf8');
+  // 【合并写入】若 14:57 已写入隔夜战法（含 entryPriceHint / overnightReview），
+  // 绝不能用 15:05 的收盘数据整份覆盖；merge 会按 strategyId 替换/追加并保留其余字段。
+  const merged = await mergeSnapshotForStrategies(date, strategiesOut, {
+    priceSource: 'close',
+    topN: TOP_N,
+  });
+  void merged; // 结果由下方日志与 return 统一披露
 
   if (errors.length) {
     console.warn('[Scheduler] 收盘快照部分战法跳过：' + errors.join('；'));
   }
   console.log(
-    `[Scheduler] 收盘快照落盘成功 ${date}：启用战法 ${enabled.length} 个，命中记录 ${totalHits} 条 → ${snapshotPath(date)}`,
+    `[Scheduler] 收盘快照落盘成功 ${date}：启用战法 ${enabled.length} 个，本次执行 ${attempted} 个（跳过 ${enabled.length - attempted}），命中记录 ${totalHits} 条 → ${snapshotPath(date)}`,
   );
 
   const cacheStats = klineCacheStats();
@@ -415,8 +436,10 @@ export async function triggerSnapshotBackfill(holidays = new Set()) {
   if (backfillRunning) {
     return { ok: true, started: false, date, reason: '补跑任务已在运行' };
   }
-  if (await snapshotExists(date)) {
-    return { ok: true, started: false, date, reason: '当日快照已存在' };
+  // 【2026-11-16 事故修复】不能只看文件是否存在：14:57 会先写只含隔夜战法的部分快照。
+  // 必须确认「完整」才跳过，否则 15:05 的全量任务会被部分快照永久挡住。
+  if (await isSnapshotComplete(date)) {
+    return { ok: true, started: false, date, reason: '当日快照已完整' };
   }
   backfillRunning = true;
   setImmediate(async () => {
