@@ -414,6 +414,16 @@ export const STRATEGY_DEFS = [
     riskNote: '隔夜突发消息风险',
     // 时间窗（需求 4.2）：非窗口内不产生新信号，但可开复盘模式用最近交易日演算
     window: { select: '14:30-14:55', buy: '14:55-15:00', sell: '次日 09:30-10:00' },
+    /**
+     * 【方案 A/D】定时器时间窗配置（后端 startScheduler 读取）：
+     * - recordTime：单兵扫描触发时刻（14:55，扫描约 44s，约 14:55:44 出候选）
+     * - reviewTime：二次复核时刻（14:57 起进入收盘集合竞价；复核优先取 14:56 bar 的
+     *   close = 14:56:59 最后一笔连续竞价，避免用集合竞价价成交）
+     * - skipFullSnapshot：15:05 全量快照必须跳过该战法，绝不能覆盖 14:55 的原始选股结果
+     */
+    recordTime: '14:55',
+    reviewTime: '14:57',
+    skipFullSnapshot: true,
     reviewable: true,
   },
   // —— 事件类 ——

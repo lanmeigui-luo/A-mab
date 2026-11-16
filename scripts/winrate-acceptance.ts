@@ -1856,6 +1856,59 @@ function runFullCodeAssertion() {
   check(toFullCode('600000') === toFullCode('600000'), '同输入恒等（无副作用/无随机）');
 }
 
+function runEntryPriceHintAssertion() {
+  const plan = { buyLow: 10, buyHigh: 10.5, stop: 9, target1: 11, target2: 12 };
+  const normalDay = [...HIST, k('2026-01-01', 10.0, 10.4, 9.9, 10.3)]; // 记录日收盘 10.3
+
+  section('尾盘复核价 E1：有 entryPriceHint 时 t_close 按复核价成交');
+  {
+    const r = makeRec({ date: '2026-01-01', ...plan });
+    r.buyTiming = 't_close';
+    r.entryPriceHint = 10.2;
+    const t = simulateTrade(r, normalDay).trade;
+    check(t.status === 'open', '已成交但未平仓 status=open（实际: ' + t.status + '）');
+    check(t.buyPrice === 10.2, 'buyPrice=10.2 用复核价（实际: ' + t.buyPrice + '）');
+    check(t.buyDate === '2026-01-01', '买入日=记录日');
+  }
+
+  section('尾盘复核价 E2：缺 entryPriceHint 时降级用日K收盘价（老数据零回归）');
+  {
+    const r = makeRec({ date: '2026-01-01', ...plan });
+    r.buyTiming = 't_close';
+    const t = simulateTrade(r, normalDay).trade;
+    check(t.buyPrice === 10.3, 'buyPrice=10.3 用收盘价（实际: ' + t.buyPrice + '）');
+  }
+
+  section('尾盘复核价 E3：hint 涨破买入上限 → 兜底判未成交');
+  {
+    const r = makeRec({ date: '2026-01-01', ...plan });
+    r.buyTiming = 't_close';
+    r.entryPriceHint = 10.9;
+    const t = simulateTrade(r, normalDay).trade;
+    check(t.status === 'invalid', 'status=invalid（实际: ' + t.status + '）');
+    check(t.anomalies.includes('high_close_unfilled'), 'anomaly=high_close_unfilled（实际: ' + t.anomalies + '）');
+    check(t.buyPrice === null, '未成交 buyPrice=null');
+  }
+
+  section('尾盘复核价 E4：有 hint 时收盘封板不判「买不进」；无 hint 仍拦截');
+  {
+    // 记录日收盘=最高、涨幅 10% → 无 hint 时原本会 limit_up_filled_close
+    const sealedDay = [...HIST, k('2026-01-01', 10.5, 11.0, 10.4, 11.0)];
+    const withHint = makeRec({ date: '2026-01-01', ...plan });
+    withHint.buyTiming = 't_close';
+    withHint.entryPriceHint = 10.4;
+    const t1 = simulateTrade(withHint, sealedDay).trade;
+    check(t1.status === 'open', '有 hint → 不被封板拦截（实际: ' + t1.status + '）');
+    check(t1.buyPrice === 10.4, '有 hint → 按 10.4 成交（实际: ' + t1.buyPrice + '）');
+
+    const noHint = makeRec({ date: '2026-01-01', ...plan });
+    noHint.buyTiming = 't_close';
+    const t2 = simulateTrade(noHint, sealedDay).trade;
+    check(t2.status === 'invalid', '无 hint → 仍判 invalid（实际: ' + t2.status + '）');
+    check(t2.anomalies.includes('limit_up_filled_close'), '无 hint → limit_up_filled_close（实际: ' + t2.anomalies + '）');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -1875,6 +1928,7 @@ async function main() {
   runEntryEngineAssertion();
   runPlaceholderAssertion();
   runFullCodeAssertion();
+  runEntryPriceHintAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

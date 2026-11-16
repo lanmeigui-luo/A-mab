@@ -192,6 +192,9 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
       // 仅行情缺失（停牌/退市/无报价）判不可买入；涨停票照常生成 open 记录，
       // 交由结算侧 simulateTrade 按 buyTiming 判定封板/一字板/高开未成交。
       const unbuyable = h.price == null;
+      // 【方案 D】14:55 选中但 14:57 复核未成交：终态 invalid + intraday_unfilled，
+      // 不进结算、不计胜率分母，但保留在明细里供审计。
+      const reviewUnfilled = h.unfilled === true;
       const trade: TradeRecord = {
         buyDate: null,
         buyPrice: null,
@@ -200,8 +203,8 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
         holdDays: null,
         returnPct: null,
         sellReason: 'unknown',
-        status: unbuyable ? 'invalid' : 'open',
-        anomalies: unbuyable ? ['unbuyable'] : [],
+        status: unbuyable || reviewUnfilled ? 'invalid' : 'open',
+        anomalies: unbuyable ? ['unbuyable'] : reviewUnfilled ? ['intraday_unfilled'] : [],
         backfilled: isHistorical,
       };
       const rec: WinRateRecord = {
@@ -216,6 +219,8 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
         signalStrength: h.strategies.find((s) => s.id === strat.strategyId)?.hitRatio ?? null,
         signalStrengthSource: 'hitRatio',
         recordedPrice: h.price ?? null,
+        // 【方案 D】14:57 复核确认的买入价（尾盘战法专用）；缺失时回测回退日K收盘价
+        entryPriceHint: h.entryPriceHint ?? null,
         buyLow: h.tradePlan?.buyLow ?? null,
         buyHigh: h.tradePlan?.buyHigh ?? null,
         stop: h.tradePlan?.stop ?? null,

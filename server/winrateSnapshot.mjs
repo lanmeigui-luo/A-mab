@@ -21,6 +21,7 @@ import { mkdir, writeFile, readFile, readdir, stat, copyFile } from 'node:fs/pro
 import { runScreen, configureKlineCache, clearKlineCache, klineCacheStats } from './screen.mjs';
 import { STRATEGY_DEFS } from './strategies/index.mjs';
 import { computeMarketStatus } from './marketStatus.mjs';
+import { fetchQuotes as tencentFetchQuotes } from './sources/tencent.mjs';
 
 // 运行时数据统一落 userData（Electron 注入 RADAR_DATA_DIR），避免装在 Program Files 时无写权限；
 // dev 未注入时回退到项目根 data/snapshots，保持原有行为。
@@ -36,6 +37,10 @@ const SNAPSHOT_DIRS = SNAPSHOT_DIR === LEGACY_SNAPSHOT_DIR
 const TOP_N = 5;
 /** 补跑任务并发锁：全市场扫描 11 个战法耗时约 20 分钟，绝不重复启动 */
 let backfillRunning = false;
+/** 14:55 扫描并发锁 + 14:57 待复核候选（方案 D） */
+let overnightRunning = false;
+let overnightPending = null;
+const SIDECAR = process.env.SIDECAR || 'http://127.0.0.1:8788';
 
 /** 本地日期 YYYY-MM-DD（避免 UTC 偏移吞日期） */
 function localDate(d = new Date()) {
@@ -149,6 +154,82 @@ export async function migrateLegacySnapshots() {
   return out;
 }
 
+/** 拉单只股票 1 分钟线并取当日 HH:MM 的 bar（14:57 复核用） */
+export async function fetchMinuteBar(fullCode, hhmm, timeoutMs = 12000) {
+  try {
+    const r = await fetch(
+      SIDECAR + '/kline/min?code=' + encodeURIComponent(fullCode) + '&period=1&adjust=none&limit=600',
+      { signal: AbortSignal.timeout(timeoutMs) },
+    );
+    const j = await r.json();
+    if (!j?.ok) return { ok: false, reason: j?.reason ?? 'sidecar ok=false' };
+    const today = localDate();
+    const bar = (j.rows || []).find((x) => {
+      const d = String(x.date || x.datetime || '');
+      return d.slice(0, 10) === today && d.slice(11, 16) === hhmm;
+    });
+    if (!bar) return { ok: false, reason: '未找到当日 ' + hhmm + ' 分钟 bar' };
+    return { ok: true, open: bar.open, close: bar.close, date: bar.date };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
+}
+
+/**
+ * 14:57 复核取价：优先 14:56 bar 的 close（14:56:59 最后一笔连续竞价），
+ * 拿不到再退 14:57 bar 的 open。绝不使用 14:57 之后的集合竞价成交价。
+ */
+export async function resolveReviewPrice(fullCode) {
+  const b56 = await fetchMinuteBar(fullCode, '14:56');
+  if (b56.ok && b56.close > 0) return { ok: true, price: b56.close, source: '14:56_close' };
+  const b57 = await fetchMinuteBar(fullCode, '14:57');
+  if (b57.ok && b57.open > 0) return { ok: true, price: b57.open, source: '14:57_open' };
+  // 分钟线不可用时的兜底：腾讯实时现价（14:57 tick 抓到的当时盘口价）。
+  // 明确标注 source，审计时能区分「精确分钟线」与「实时现价兜底」。
+  try {
+    const q = await tencentFetchQuotes([fullCode]);
+    const row = (q?.rows || [])[0];
+    if (row?.price > 0) return { ok: true, price: row.price, source: 'quote_fallback' };
+  } catch { /* 落到失败 */ }
+  return { ok: false, reason: '14:56/14:57 分钟线与实时现价均不可用' };
+}
+
+/** 只跑指定战法，返回紧凑快照条目 */
+async function runSnapshotForStrategies(ids, date) {
+  const strategiesOut = [];
+  let total = 0;
+  for (const id of ids) {
+    const def = STRATEGY_DEFS.find((x) => x.id === id);
+    if (!def || def.available === false) continue;
+    const res = await runScreen({ strategyIds: [id], sortBy: 'changePct', poolSize: 300, klineBars: 120, scan: 'full' });
+    if (!res.ok) return { ok: false, reason: id + ': ' + (res.reason || 'ok=false'), strategiesOut };
+    const all = res.hits || [];
+    const hits = all.slice(0, TOP_N).map(projectHit);
+    strategiesOut.push({ strategyId: def.id, strategyName: def.name, insufficientHits: all.length < TOP_N, hits });
+    total += hits.length;
+  }
+  return { ok: true, strategiesOut, hits: total };
+}
+
+/** 合并写入：读已有快照，按 strategyId 替换/追加，绝不整份覆盖 */
+export async function mergeSnapshotForStrategies(date, strategiesOut, extra = {}) {
+  const existing = (await readSnapshot(date)) || {
+    date, generatedAt: new Date().toISOString(), priceSource: 'close', topN: TOP_N, strategies: [],
+  };
+  const map = new Map((existing.strategies || []).map((x) => [x.strategyId, x]));
+  for (const x of strategiesOut) map.set(x.strategyId, x);
+  const merged = { ...existing, ...extra, date, generatedAt: new Date().toISOString(), strategies: [...map.values()] };
+  await ensureSnapshotDir();
+  await writeFile(snapshotPath(date), JSON.stringify(merged, null, 2), 'utf8');
+  return merged;
+}
+
+/** 该日是否已有指定战法的条目（用于 15:05 跳过已写入的尾盘战法） */
+export async function snapshotHasStrategy(date, strategyId) {
+  const snap = await readSnapshot(date);
+  return !!(snap?.strategies || []).find((x) => x.strategyId === strategyId);
+}
+
 /**
  * 执行当日收盘快照落盘（口径 A 核心）。
  * 遍历启用战法，逐战法调 runScreen 取前 5，组合写 JSON。
@@ -166,7 +247,14 @@ export async function runDailyWinRateSnapshot() {
   let totalHits = 0;
   const errors = [];
 
+  let attempted = 0;
   for (const def of enabled) {
+    // 【方案 D】14:55 已写入的尾盘战法绝不被 15:00 收盘数据覆盖
+    if (def.skipFullSnapshot && (await snapshotHasStrategy(date, def.id))) {
+      console.log('[Scheduler] ' + def.id + ' 已有 ' + (def.recordTime || '盘前') + ' 记录，跳过 15:05 覆盖');
+      continue;
+    }
+    attempted++;
     try {
       // 与前端 recordStrategy 一致：单战法过滤，使 tradePlan / score 唯一归属该战法
       // 显式写 klineBars：自动记录链路必须拿到足量 K 线，否则首板打板等战法恒 0 命中
@@ -198,8 +286,8 @@ export async function runDailyWinRateSnapshot() {
   // 若所有启用战法都因上游不可用而跳过（trading=false 等），绝不落盘空快照：
   // 否则前端会把「没跑成」误判成「跑了但 0 命中」并生成 no_signal，属于伪造审计事实。
   // 不写文件 → 前端正确显示 snapshot_missing，且定时器下一分钟会继续重试。
-  if (enabled.length > 0 && errors.length >= enabled.length) {
-    console.warn('[Scheduler] 全部 ' + enabled.length + ' 个战法取数失败，跳过落盘（保留「快照缺失」语义）：' + errors[0]);
+  if (attempted > 0 && errors.length >= attempted) {
+    console.warn('[Scheduler] 全部 ' + attempted + ' 个战法取数失败，跳过落盘（保留「快照缺失」语义）：' + errors[0]);
     clearKlineCache();
     return { date, ok: false, strategies: 0, hits: 0, file: null, errors };
   }
@@ -217,6 +305,93 @@ export async function runDailyWinRateSnapshot() {
   console.log('[Scheduler] K线共享池：缓存 ' + cacheStats.entries + ' 只，命中 ' + cacheStats.hits + ' 次（省去重复网络请求）');
   clearKlineCache();
   return { date, ok: true, strategies: strategiesOut.length, hits: totalHits, file: snapshotPath(date), errors };
+}
+
+/**
+ * 【方案 D】14:55 单兵扫描：只跑配置了 recordTime 的尾盘战法（当前为隔夜持股法）。
+ * 扫描约 44 秒，结果暂存 overnightPending，等 14:57 二次复核再落盘。
+ */
+export async function triggerOvernightScan(holidays = new Set()) {
+  const now = new Date();
+  const date = localDate(now);
+  if (computeMarketStatus(now, holidays) === 'holiday') {
+    return { ok: true, started: false, date, reason: '非交易日，不扫描' };
+  }
+  const mins = now.getHours() * 60 + now.getMinutes();
+  if (mins < 14 * 60 + 55) return { ok: true, started: false, date, reason: '未到 14:55' };
+  if (overnightRunning) return { ok: true, started: false, date, reason: '14:55 扫描已在运行' };
+  if (await snapshotHasStrategy(date, 'overnight-hold')) {
+    return { ok: true, started: false, date, reason: '当日隔夜战法已记录' };
+  }
+  overnightRunning = true;
+  setImmediate(async () => {
+    try {
+      const t0 = Date.now();
+      const r = await runSnapshotForStrategies(['overnight-hold'], date);
+      if (!r.ok) { console.warn('[Overnight] 14:55 扫描失败：' + r.reason); return; }
+      const strat = r.strategiesOut[0];
+      overnightPending = {
+        date,
+        hits: strat?.hits || [],
+        strategyName: strat?.strategyName || '隔夜持股法',
+        insufficientHits: !!strat?.insufficientHits,
+      };
+      console.log('[Overnight] 14:55 扫描完成：' + (strat?.hits || []).length + ' 只候选，耗时 ' +
+        ((Date.now() - t0) / 1000).toFixed(1) + 's，等待 14:57 复核');
+    } catch (e) {
+      console.warn('[Overnight] 14:55 扫描异常：' + ((e && e.message) || e));
+    } finally {
+      overnightRunning = false;
+    }
+  });
+  return { ok: true, started: true, date, reason: '已在后台启动 14:55 隔夜战法扫描' };
+}
+
+/**
+ * 【方案 D】14:57 二次复核：候选价仍在 [buyLow,buyHigh] 内才确认成交并写 entryPriceHint；
+ * 跌出下限/涨破上限/取价失败 → unfilled（前端转 invalid + intraday_unfilled）。
+ */
+export async function reviewOvernightPending(holidays = new Set()) {
+  if (!overnightPending) return { ok: true, done: false, reason: '无待复核候选' };
+  const now = new Date();
+  const date = localDate(now);
+  const mins = now.getHours() * 60 + now.getMinutes();
+  if (mins < 14 * 60 + 57) return { ok: true, done: false, reason: '未到 14:57' };
+  if (mins > 15 * 60) { overnightPending = null; return { ok: true, done: false, reason: '已过 15:00，放弃复核' }; }
+  if (overnightPending.date !== date) { overnightPending = null; return { ok: true, done: false, reason: '跨日，丢弃待复核' }; }
+
+  const { hits, strategyName, insufficientHits } = overnightPending;
+  overnightPending = null;
+
+  const confirmed = [];
+  const unfilled = [];
+  await Promise.all(hits.map(async (h) => {
+    const p = await resolveReviewPrice(h.fullCode);
+    if (!p.ok) {
+      unfilled.push({ ...h, unfilled: true, unfilledReason: '复核取价失败：' + p.reason });
+      return;
+    }
+    const lo = h.tradePlan?.buyLow;
+    const hi = h.tradePlan?.buyHigh;
+    if (lo != null && p.price < lo) {
+      unfilled.push({ ...h, unfilled: true, unfilledReason: '复核价 ' + p.price + ' 低于买入下限 ' + lo });
+    } else if (hi != null && p.price > hi) {
+      unfilled.push({ ...h, unfilled: true, unfilledReason: '复核价 ' + p.price + ' 高于买入上限 ' + hi });
+    } else {
+      confirmed.push({ ...h, entryPriceHint: p.price, entryPriceSource: p.source });
+    }
+  }));
+
+  const all = [...confirmed, ...unfilled];
+  await mergeSnapshotForStrategies(date, [{
+    strategyId: 'overnight-hold',
+    strategyName,
+    insufficientHits,
+    hits: all,
+  }], { overnightReview: { at: new Date().toISOString(), confirmed: confirmed.length, unfilled: unfilled.length } });
+
+  console.log('[Overnight] 14:57 复核完成：成交 ' + confirmed.length + ' 只，未成交 ' + unfilled.length + ' 只');
+  return { ok: true, done: true, date, confirmed: confirmed.length, unfilled: unfilled.length };
 }
 
 /**
@@ -285,11 +460,21 @@ export function startScheduler(getHolidays) {
   const tick = async () => {
     try {
       const now = new Date();
-      if (!shouldRunSnapshotNow(now, getHolidays())) return;
-      // 不再在 tick 内 await 全市场扫描：交给带并发锁的后台补跑入口。
-      // 旧实现无锁，任务跑 20 分钟期间每分钟都会再启动一次，最多可并发 5+ 个扫描。
-      const r = await triggerSnapshotBackfill(getHolidays());
-      if (r.started) console.log('[Scheduler] ' + r.reason + ' → ' + r.date);
+      const mins = now.getHours() * 60 + now.getMinutes();
+      // 【方案 D】14:55–14:59：尾盘战法单兵扫描
+      if (mins >= 14 * 60 + 55 && mins <= 14 * 60 + 59) {
+        const ov = await triggerOvernightScan(getHolidays());
+        if (ov.started) console.log('[Scheduler] ' + ov.reason + ' → ' + ov.date);
+      }
+      // 【方案 D】14:57–14:59：二次复核（14:55 扫描约 44s，此时 pending 已就绪）
+      if (mins >= 14 * 60 + 57 && mins <= 14 * 60 + 59) {
+        await reviewOvernightPending(getHolidays());
+      }
+      // ≥15:05：其余战法全量快照（自动跳过已写入的尾盘战法）
+      if (shouldRunSnapshotNow(now, getHolidays())) {
+        const r = await triggerSnapshotBackfill(getHolidays());
+        if (r.started) console.log('[Scheduler] ' + r.reason + ' → ' + r.date);
+      }
     } catch (e) {
       console.error('[Scheduler] 检查/执行异常：', (e && e.message) || e);
     }
@@ -297,5 +482,5 @@ export function startScheduler(getHolidays) {
   // 启动即检查一次（不等第一个 60s 间隔）：错过窗口时只要开过软件就立刻补跑
   void tick();
   setInterval(tick, 60_000);
-  console.log('[radar-server] 收盘快照定时器已就绪（交易日 15:05 后任意时刻，当日快照缺失即自动补跑）');
+  console.log('[radar-server] 快照定时器已就绪：14:55 尾盘战法单兵扫描 → 14:57 复核 → 15:05 其余战法（均自动跳过已写入的尾盘战法）');
 }

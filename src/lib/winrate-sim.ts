@@ -496,9 +496,12 @@ export function simulateTrade(
     if (skipLimitUpCheck) {
       anomalies.push('new_stock_no_limit_check');
     }
+    // 【方案 D】14:57 复核价存在即视为「收盘前已成交」，封板判定不再适用
+    const hintRaw = record.entryPriceHint;
+    const hintApplied = hintRaw != null && Number.isFinite(hintRaw) && hintRaw > 0;
     // 与混合时机前置判定共用 sealedLimitUpAt，保证「记录日封板」判据唯一。
     // 只有纯 t_close（或降解为 t_close 且确实未封板）会走到这里；混合时机封板时已顺延，不会进入本分支。
-    if (!skipLimitUpCheck && sealedLimitUpAt(buyDayK, dailyK[buyIdx - 1], code, isST)) {
+    if (!hintApplied && !skipLimitUpCheck && sealedLimitUpAt(buyDayK, dailyK[buyIdx - 1], code, isST)) {
       trade.status = 'invalid';
       trade.buyDate = buyDate;
       trade.invalidDate = buyDate;
@@ -508,8 +511,12 @@ export function simulateTrade(
       trade.excludedFromStats = true;
       return { trade, tPlus1SellDate: null };
     }
-    // 未封板：以收盘价判定是否落入买入区间 [buyLow, buyHigh]
-    const close = buyDayK.close;
+    // 【方案 D】14:57 复核价优先：尾盘战法（隔夜持股）在记录时已用分钟线确认成交，
+    // 买入发生在收盘集合竞价之前，比日K收盘价更贴近真实连续竞价。
+    // 有 hint 时跳过上面的「收盘封板买不进」判定 —— 14:57 已成交，15:00 封板只是持仓浮盈；
+    // 缺失（老数据 / 其他战法）时回退原收盘价口径，零回归。
+    // 未封板：以复核价（有 hint）或收盘价（无 hint）判定是否落入买入区间 [buyLow, buyHigh]
+    const close = hintApplied ? (hintRaw as number) : buyDayK.close;
     if (record.buyLow != null && close < record.buyLow) {
       trade.status = 'invalid';
       trade.buyDate = buyDate;

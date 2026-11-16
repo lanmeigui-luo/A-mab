@@ -110,7 +110,8 @@ export type WinRateAnomaly =
   | 'high_open_over_target1' // 买入当日开盘价已 ≥ 目标一，计划失效未成交
   | 'param_changed' // 参数版本变更
   | 'no_signal' // 当日全市场无符合该战法条件的标的（占位记录）
-  | 'snapshot_missing'; // 该交易日无收盘快照（自动任务未运行）
+  | 'snapshot_missing' // 该交易日无收盘快照（自动任务未运行）
+  | 'intraday_unfilled'; // 14:55 选中但 14:57 复核未成交（价格超出买入区间/停牌）
 
 /** 异常标注中文文案（唯一出处；逻辑层只用 key） */
 export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
@@ -130,6 +131,7 @@ export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
   param_changed: '参数版本变更',
   no_signal: '当日全市场无符合该战法条件的标的',
   snapshot_missing: '快照缺失（当天未生成收盘快照）',
+  intraday_unfilled: '14:57 复核未成交（价格超出买入区间）',
   high_open_over_target1: '高开越过目标一(未成交)',
 };
 
@@ -389,6 +391,8 @@ export interface WinRateRecord {
   signalStrengthSource: SignalStrengthSource;
   /** 记录时价格（元）；拿不到为 null */
   recordedPrice: number | null;
+  /** 【方案 D】14:57 复核确认的买入价；尾盘战法专用，缺失时回测回退日K收盘价 */
+  entryPriceHint?: number | null;
   /** 买入区间（元）；拿不到为 null */
   buyLow: number | null;
   buyHigh: number | null;
@@ -562,6 +566,18 @@ export interface WinRateSnapshotHit {
     /** 买入时机（收盘买入 / 次日开盘买入）；后端未下发时前端按策略配置回填 */
     buyTiming?: BuyTiming;
   };
+  /**
+   * 【方案 D】14:57 复核确认的买入价（元）。仅尾盘类战法（隔夜持股）由后端写入：
+   * 14:55 扫描出候选 → 14:57 用分钟线复核价格仍在 [buyLow,buyHigh] 内才成交并落此价。
+   * 缺失（老快照 / 其他战法）时回测按日K收盘价口径，零回归。
+   */
+  entryPriceHint?: number | null;
+  /** 14:57 复核取价来源：14:56_close / 14:57_open / quote_fallback（审计用） */
+  entryPriceSource?: string | null;
+  /** 14:55 选中但 14:57 复核未成交（价格跌出下限 / 涨破上限 / 停牌） */
+  unfilled?: boolean;
+  /** 未成交原因（人类可读，供审计展示） */
+  unfilledReason?: string | null;
 }
 
 /** 快照中单个战法的命中集合 */
