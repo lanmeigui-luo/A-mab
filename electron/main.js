@@ -6,8 +6,8 @@
 // - 端口不硬编码：
 //     · API 端口（node-api 内置于主进程）用 net.listen(0) 抢空闲端口并持久化到
 //       userData/ports.json，下次优先复用（localStorage 按 origin 隔离，端口稳定才能保留已加密的模型 Key）。
-//     · tdx-server / sidecar-server 用固定端口（tdx=8789、sidecar=8788）拉起，
-//       主进程轮询其 /health 接口确认就绪后，注入 node-api 的 TDX/SIDECAR 环境变量。
+//     · tdx-server / sidecar-server 也用动态端口（与主 API 同样 listen(0) 抢空闲端口），
+//       彻底避免「网页 dev 占着 8788/8789 时桌面版启动失败或误连到 dev 的进程」。
 //       （早期版本用 --port 0 + 读取 stdout 的 PORT=，但 Windows 下 Python pipe 块缓冲导致回写丢失，已弃用。）
 // - tdx-server 为【可选主源】：拉起失败 / health 超时 / 取不到数一律静默降级腾讯·新浪，
 //   不弹错误窗、不阻止主窗口启动；sidecar-server 同为 best-effort。
@@ -381,31 +381,33 @@ async function startup() {
   //    进程起不来 / health 超时 / 取不到数，都不弹错误窗、不阻止主窗口启动；
   //    置 TDX_DISABLED=1 让 node-api 直接走腾讯·新浪降级链路，避免每次行情请求白等一次连接。
   const TDX_TIMEOUT_MS = 15000;
-  const tdxResult = await spawnFixedPort(SERVICES[0], 8789, TDX_TIMEOUT_MS);
+  const tdxPort = await getFreePort();
+  const tdxResult = await spawnFixedPort(SERVICES[0], tdxPort, TDX_TIMEOUT_MS);
   if (!tdxResult.ok) {
     log("[tdx] 可选主源未就绪（" + (tdxResult.reason || "health 超时") + "），静默降级腾讯/新浪，不阻塞启动");
     process.env.TDX_DISABLED = "1";
   } else {
-    log("[tdx] 可选主源已就绪 @8789");
-    process.env.TDX = 'http://127.0.0.1:8789';
+    log("[tdx] 可选主源已就绪 @" + tdxPort);
+    process.env.TDX = 'http://127.0.0.1:' + tdxPort;
   }
 
-  // 3) 补充源 sidecar（best-effort）：固定端口 8788 + 轮询 /health；失败仅横幅不阻塞。
+  // 3) 补充源 sidecar（best-effort）：动态端口 + 轮询 /health；失败仅横幅不阻塞。
   //    · resolveService 返回 null = extraResources 与源码均缺失 = 精简版 → 显式置 SIDECAR_DISABLED=1
   //      （index.mjs 的 sidecarHealth 据此返回 disabled:true，区别于进程崩溃）。
-  //    · 否则固定端口拉起；15s 内 /health 仍超时 = 进程崩溃/未就绪 → 标 SIDECAR=0，
+  //    · 否则动态端口拉起；15s 内 /health 仍超时 = 进程崩溃/未就绪 → 标 SIDECAR=0，
   //      由 sidecarHealth 标记 processAlive:false（disabled 仍为 false），前端据此区分。
   const sidecarResolved = resolveService(SERVICES[1]);
   if (!sidecarResolved) {
     process.env.SIDECAR_DISABLED = '1';
     log('[sidecar] 精简版未含 sidecar-server.exe，补充源禁用（横幅提示，不阻塞主窗口）');
   } else {
-    const sidecarResult = await spawnFixedPort(SERVICES[1], 8788, 15000);
+    const sidecarPort = await getFreePort();
+    const sidecarResult = await spawnFixedPort(SERVICES[1], sidecarPort, 15000);
     if (!sidecarResult.ok) {
       log('[sidecar] 15s 内 health 探测超时，补充源进程崩溃/未就绪（横幅提示，不阻塞主窗口）');
       process.env.SIDECAR = 'http://127.0.0.1:0';
     } else {
-      process.env.SIDECAR = 'http://127.0.0.1:8788';
+      process.env.SIDECAR = 'http://127.0.0.1:' + sidecarPort;
     }
   }
 

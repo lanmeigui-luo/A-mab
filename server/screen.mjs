@@ -287,21 +287,58 @@ export async function ensureCtx() {
  */
 const klineUsage = { tdx: 0, tencent: 0 };
 
-async function fetchKlineMain(fullCode, period, count, fq) {
+/**
+ * 【scan=full 共享 K 线池】收盘快照逐战法调用 runScreen 11 次，
+ * 各战法预筛后的候选池高度重叠；无缓存时同一只票会被重复拉取最多 11 次。
+ * - API 手动 full 扫描：默认短 TTL 30s，保证盘中数据新鲜；
+ * - 收盘快照批处理：由 winrateSnapshot 开启长 TTL（一次批处理内共享），结束清空。
+ * 只对 scan==='full' 生效，topN 与普通 /api/kline 行为完全不变。
+ */
+let klineCache = new Map();
+let klineCacheTtlMs = 30_000;
+let klineCacheHits = 0;
+
+export function configureKlineCache(ttlMs) {
+  klineCacheTtlMs = Math.max(0, Number(ttlMs) || 0);
+  klineCache = new Map();
+  klineCacheHits = 0;
+}
+export function clearKlineCache() {
+  klineCache = new Map();
+  klineCacheHits = 0;
+}
+export function klineCacheStats() {
+  return { entries: klineCache.size, hits: klineCacheHits, ttlMs: klineCacheTtlMs };
+}
+
+async function fetchKlineMain(fullCode, period, count, fq, useCache = false) {
+  const key = useCache ? fullCode + ':' + period + ':' + count + ':' + fq : null;
+  if (key) {
+    const hit = klineCache.get(key);
+    if (hit && Date.now() - hit.at < klineCacheTtlMs) {
+      klineCacheHits++;
+      return { ...hit.data, cached: true };
+    }
+  }
+  let out;
   try {
     const r = await tdx.fetchKline(fullCode, period, count, fq);
     // 即便接口 ok=true 也要校验真实性：通达信公共服务器对指数等标的的 bar
     // 缓冲区会解析损坏（仅首根正常、其余乱码），必须拦截以免污染精算。
     if (r?.ok && r.rows?.length && isKlineBatchValid(r.rows)) {
       klineUsage.tdx++;
-      return { rows: r.rows, source: 'tdx', degraded: false, notes: r.notes ?? [] };
+      out = { rows: r.rows, source: 'tdx', degraded: false, notes: r.notes ?? [] };
     }
   } catch {
     /* 主源失败，走降级 */
   }
-  const t = await tencent.fetchKline(fullCode, period, fq, count);
-  klineUsage.tencent++;
-  return { rows: t.rows, source: 'tencent', degraded: true, notes: t.notes ?? [] };
+  if (!out) {
+    const t = await tencent.fetchKline(fullCode, period, fq, count);
+    klineUsage.tencent++;
+    out = { rows: t.rows, source: 'tencent', degraded: true, notes: t.notes ?? [] };
+  }
+  if (key) klineCache.set(key, { at: Date.now(), data: out });
+  return out;
 }
 
 async function mapLimit(arr, limit, fn) {
@@ -585,7 +622,7 @@ export async function runScreen({
   // 3. 批量 K 线 + 计算
   const screened = await mapLimit(pool, concurrency, async (snap) => {
     try {
-      const k = await fetchKlineMain(snap.fullCode, 'day', klineBars, 'qfq');
+      const k = await fetchKlineMain(snap.fullCode, 'day', klineBars, 'qfq', scan === 'full');
       if (k.degraded) klineFallback++;
       else klineTdx++;
       const ind = computeIndicators(k.rows, snap.code);

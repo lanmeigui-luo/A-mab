@@ -18,7 +18,7 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { mkdir, writeFile, readFile, readdir, stat, copyFile } from 'node:fs/promises';
-import { runScreen } from './screen.mjs';
+import { runScreen, configureKlineCache, clearKlineCache, klineCacheStats } from './screen.mjs';
 import { STRATEGY_DEFS } from './strategies/index.mjs';
 import { computeMarketStatus } from './marketStatus.mjs';
 
@@ -157,6 +157,9 @@ export async function migrateLegacySnapshots() {
 export async function runDailyWinRateSnapshot() {
   const date = localDate(new Date());
   await ensureSnapshotDir();
+  // 11 个战法共享同一份 K 线缓存：批处理期间长 TTL（2h），结束即清空，
+  // 不影响 API 手动 full 扫描的 30s 短 TTL 与新数据新鲜度。
+  configureKlineCache(2 * 60 * 60 * 1000);
 
   const enabled = STRATEGY_DEFS.filter((s) => s.available !== false);
   const strategiesOut = [];
@@ -197,6 +200,7 @@ export async function runDailyWinRateSnapshot() {
   // 不写文件 → 前端正确显示 snapshot_missing，且定时器下一分钟会继续重试。
   if (enabled.length > 0 && errors.length >= enabled.length) {
     console.warn('[Scheduler] 全部 ' + enabled.length + ' 个战法取数失败，跳过落盘（保留「快照缺失」语义）：' + errors[0]);
+    clearKlineCache();
     return { date, ok: false, strategies: 0, hits: 0, file: null, errors };
   }
 
@@ -209,6 +213,9 @@ export async function runDailyWinRateSnapshot() {
     `[Scheduler] 收盘快照落盘成功 ${date}：启用战法 ${enabled.length} 个，命中记录 ${totalHits} 条 → ${snapshotPath(date)}`,
   );
 
+  const cacheStats = klineCacheStats();
+  console.log('[Scheduler] K线共享池：缓存 ' + cacheStats.entries + ' 只，命中 ' + cacheStats.hits + ' 次（省去重复网络请求）');
+  clearKlineCache();
   return { date, ok: true, strategies: strategiesOut.length, hits: totalHits, file: snapshotPath(date), errors };
 }
 
