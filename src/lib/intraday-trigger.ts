@@ -9,11 +9,14 @@
  *    交由日K结算（simulateTrade）兜底，不强行判定，避免伪造成交顺序。
  *  - 命中即按「触发阈值价」平仓（stop/target1/target2），与日K引擎口径一致；
  *    holdDays 用自然日近似（无交易日历），daily-K 结算不会再改已平仓记录，属已知的轻量近似。
+ *  - 成交即洗白：盘中 1min 判定成功意味着交易链路清晰，旧记录的 excludedFromStats /
+ *    invalidReason / v1-legacy / ambiguous_* 等历史脏标签全部清除。
  */
 
 import type { WinRateRecord, SellReason } from '../domain/winrate';
 import type { WinRateTradePatch } from '../hooks/useWinRateStore';
 import { disambiguateIntraday, tradingDaysBetween, type MinuteBar } from './winrate-minute';
+import { intradayCleanupFields } from './intraday-cleanup';
 
 /** 一笔记录的买卖计划（止损 / 目标一 / 目标二） */
 export interface IntradayPlan {
@@ -79,6 +82,9 @@ export function buildIntradayClosePatch(
   const holdDays = buyDate != null ? tradingDaysBetween(buyDate, sellDate) : null;
 
   return {
+    // 【洗白】1min 实时判定成功 = 成交清晰：恢复计入分母、清旧规则失效说明、
+    // 升级规则版本、剔除历史歧义/未成交类 anomaly（详见 src/lib/intraday-cleanup.ts）。
+    ...intradayCleanupFields(record),
     sellReason: trigger.reason,
     sellPrice,
     sellDate,
@@ -86,6 +92,5 @@ export function buildIntradayClosePatch(
     holdDays,
     status: 'closed',
     monitorClosed: true,
-    anomalies: record.trade.anomalies,
   };
 }

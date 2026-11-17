@@ -30,6 +30,7 @@ import {
 import { toFullCode, inferMarket } from '../src/lib/full-code';
 import * as fs from 'fs';
 import { dedupeRecords, recordBusinessKey } from '../src/lib/record-dedupe';
+import { intradayCleanupFields } from '../src/lib/intraday-cleanup';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -1978,6 +1979,44 @@ function runRecordDedupeAssertion() {
   }
 }
 
+function runIntradayCleanupAssertion() {
+  section('盘中洗白 C1：旧歧义标签全部清除，统计口径恢复');
+  {
+    const old = {
+      trade: {
+        anomalies: ['data_missing', 'high_close_unfilled', 'suspended_deferred', 'unbuyable'] as WinRateAnomaly[],
+      },
+    };
+    const patch = intradayCleanupFields(old);
+    check(patch.excludedFromStats === false, 'excludedFromStats 强制 false（恢复计入分母）');
+    check(patch.invalidReason === undefined, 'invalidReason 清空');
+    check(patch.ruleVersion === 'v2-t1-fix', 'ruleVersion 升级到 v2-t1-fix（实际 ' + patch.ruleVersion + '）');
+    check(Array.isArray(patch.anomalies) && patch.anomalies.length === 0, '歧义/未成交类 anomaly 全清');
+  }
+
+  section('盘中洗白 C2：客观事实类 anomaly 保留');
+  {
+    const old = {
+      trade: {
+        anomalies: ['new_stock_no_limit_check', 'backfilled', 'param_changed', 'data_missing'] as WinRateAnomaly[],
+      },
+    };
+    const patch = intradayCleanupFields(old);
+    check((patch.anomalies || []).length === 3, '保留 3 条事实标注（实际 ' + (patch.anomalies || []).length + '）');
+    check((patch.anomalies || []).includes('new_stock_no_limit_check'), '保留次新股规则事实');
+    check((patch.anomalies || []).includes('backfilled'), '保留补拉来源事实');
+    check(!(patch.anomalies || []).includes('data_missing'), '数据缺失标注被清除');
+  }
+
+  section('盘中洗白 C3：干净记录不引入新标签');
+  {
+    const clean = { trade: { anomalies: ['backfilled'] as WinRateAnomaly[] } };
+    const patch = intradayCleanupFields(clean);
+    check((patch.anomalies || []).length === 1, '原标注原样保留');
+    check(patch.excludedFromStats === false, '统计口径仍为计入');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2001,6 +2040,7 @@ async function main() {
   runSnapshotCompletenessAssertion();
   runSnapshotCompletenessLogicAssertion();
   runRecordDedupeAssertion();
+  runIntradayCleanupAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

@@ -38,6 +38,7 @@ import { fetchMinuteBars, toFullCode } from './useWinRateRecorder';
 import { marketApi } from '../services/market';
 import { isWithinTradingHours, RECORD_CUTOFF_MINS, isWeekday } from '../lib/tradingTime';
 import { evaluateIntradayTrigger, buildIntradayClosePatch } from '../lib/intraday-trigger';
+import { intradayCleanupFields } from '../lib/intraday-cleanup';
 import {
   evaluateIntradayEntry,
   sliceDayBars,
@@ -245,6 +246,8 @@ function processCode(
       if (dec.kind === 'bought') {
         // 盘中实时成交 → 转「持仓中」，并打防重标记：晚间日K兜底据此锁定买入、绝不二次买入
         updateTrade(r.id, {
+          // 【洗白】盘中真实成交同样代表链路清晰：清旧歧义标签、恢复统计口径
+          ...intradayCleanupFields(r),
           buyDate: today,
           buyPrice: dec.buyPrice,
           status: 'open',

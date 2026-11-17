@@ -23,6 +23,7 @@
     "src/lib/winrate-minute.ts",
     "src/lib/full-code.ts",
     "src/lib/record-dedupe.ts",
+    "src/lib/intraday-cleanup.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }
