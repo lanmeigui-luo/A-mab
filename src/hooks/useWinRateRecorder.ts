@@ -56,7 +56,7 @@ import {
   genWinRateRecordId,
   nextTradingDateGuess,
   makePlaceholderRecord,
-  isPlaceholderRecord,
+  realRecordDates,
   type WinRateRecord,
   type TradeRecord,
   type WinRateAnomaly,
@@ -653,10 +653,9 @@ export function useWinRateRecorder() {
       const todayStr = localDate();
       const recordsNow = recordsRef.current;
       // 关键：existingDates 只认「真实记录」。占位记录不算，否则后续快照补出真实命中时
-      // 该日会被跳过、永远补不进来（漏票）。
-      const existingDates = new Set(
-        recordsNow.filter((r) => !isPlaceholderRecord(r)).map((r) => r.date),
-      );
+      // 该日会被跳过、永远补不进来（漏票）。判定口径统一到 src/domain/winrate.ts 的纯函数，
+      // 可被离线验收直接覆盖（纯 hooks 逻辑无法进 tsconfig.test.json 编译图）。
+      const existingDates = realRecordDates(recordsNow);
       const existingKeys = new Set(
         recordsNow.map((r) => r.date + ':' + r.strategyId + ':' + r.code),
       );

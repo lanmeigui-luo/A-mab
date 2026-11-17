@@ -26,6 +26,9 @@ import {
   makePlaceholderRecord,
   placeholderKind,
   isPlaceholderRecord,
+  noSignalExpiryAt,
+  isRecordedTabVisible,
+  realRecordDates,
 } from '../src/domain/winrate';
 import { toFullCode, inferMarket } from '../src/lib/full-code';
 import * as fs from 'fs';
@@ -2017,6 +2020,64 @@ function runIntradayCleanupAssertion() {
   }
 }
 
+function runPlaceholderLifecycleAssertion() {
+  section('空仓生命周期 L1：周五空仓 → 周末与下周一 17:00 前可见，17:00 后隐藏');
+  {
+    // 2026-11-13 是周五，T+1 交易日为 11-16（周一）
+    const fri = makePlaceholderRecord({
+      date: '2026-11-13', kind: 'no_signal', strategyId: 'overnight-hold',
+      strategyName: '隔夜持股法', priceSource: 'close', backfilled: false,
+      recordedAt: '2026-11-13T14:57:00.000Z',
+    });
+    const expiry = noSignalExpiryAt('2026-11-13');
+    check(expiry.getFullYear() === 2026 && expiry.getMonth() === 10 && expiry.getDate() === 16,
+          '截止日 = 下周一 11-16（实际 ' + expiry.toDateString() + '）');
+    check(expiry.getHours() === 17 && expiry.getMinutes() === 0, '截止时刻 = 17:00');
+    check(isRecordedTabVisible(fri, new Date('2026-11-13T15:00:00')), '记录日当天可见');
+    check(isRecordedTabVisible(fri, new Date('2026-11-14T10:00:00')), '周六可见');
+    check(isRecordedTabVisible(fri, new Date('2026-11-15T10:00:00')), '周日可见');
+    check(isRecordedTabVisible(fri, new Date('2026-11-16T16:59:00')), '下周一 16:59 可见');
+    check(!isRecordedTabVisible(fri, new Date('2026-11-16T17:01:00')), '下周一 17:01 隐藏');
+  }
+
+  section('空仓生命周期 L2：周一~周四按自然日+1；其它占位与普通记录不受限');
+  {
+    const mon = makePlaceholderRecord({
+      date: '2026-11-16', kind: 'no_signal', strategyId: 'trend-break',
+      strategyName: '趋势突破', priceSource: 'close', backfilled: false,
+      recordedAt: '2026-11-16T09:00:00.000Z',
+    });
+    check(isRecordedTabVisible(mon, new Date('2026-11-17T16:59:00')), '周二 16:59 可见');
+    check(!isRecordedTabVisible(mon, new Date('2026-11-17T17:01:00')), '周二 17:01 隐藏');
+
+    const miss = makePlaceholderRecord({
+      date: '2026-01-05', kind: 'snapshot_missing', strategyId: '__snapshot_missing__',
+      strategyName: '系统', priceSource: 'close', backfilled: true,
+      recordedAt: '2026-01-06T09:00:00.000Z',
+    });
+    check(isRecordedTabVisible(miss, new Date('2027-01-01T10:00:00')), 'snapshot_missing 不受时间限制');
+    const normal = makeRec({ date: '2026-01-01', buyLow: 10, buyHigh: 10.5, stop: 9, target1: 11, target2: 12 });
+    check(isRecordedTabVisible(normal, new Date('2027-01-01T10:00:00')), '普通记录不受时间限制');
+  }
+
+  section('空仓生命周期 L3：补拉 existingDates 不把占位日算作已完成');
+  {
+    const ph = makePlaceholderRecord({
+      date: '2026-11-16', kind: 'no_signal', strategyId: 'ma-bull',
+      strategyName: '均线多头', priceSource: 'close', backfilled: false,
+      recordedAt: '2026-11-16T09:00:00.000Z',
+    });
+    const real = makeRec({ date: '2026-11-15', buyLow: 10, buyHigh: 10.5, stop: 9, target1: 11, target2: 12 });
+    const dates = realRecordDates([ph, real]);
+    check(!dates.has('2026-11-16'), '仅有 no_signal 的日期不算已有真实记录');
+    check(dates.has('2026-11-15'), '有真实记录的日期照常算已有');
+    const tbl = fs.readFileSync('src/components/WinRateTradeTable.tsx', 'utf8');
+    check(tbl.includes('isRecordedTabVisible'), '表格层已接入生命周期过滤');
+    const rec = fs.readFileSync('src/hooks/useWinRateRecorder.ts', 'utf8');
+    check(rec.includes('realRecordDates(recordsNow)'), '补拉去重已改用统一纯函数');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2041,6 +2102,7 @@ async function main() {
   runSnapshotCompletenessLogicAssertion();
   runRecordDedupeAssertion();
   runIntradayCleanupAssertion();
+  runPlaceholderLifecycleAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

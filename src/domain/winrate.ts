@@ -618,6 +618,45 @@ export function isPlaceholderRecord(record: WinRateRecord): boolean {
   return placeholderKind(record) !== null;
 }
 
+/**
+ * 【空仓占位展示生命周期】no_signal 在「已记录」Tab 的隐藏截止时间：T+1 交易日 17:00。
+ * 复用 nextTradingDateGuess（跳过周末；不处理法定节假日，前端无日历时的既定近似）：
+ *  - 周一~周四：次日 17:00
+ *  - 周五：下周一 17:00（整个周末继续展示）
+ * 用本地时区构造，避开 UTC 偏移；非法日期回退 new Date(0)（视为已过期，保守隐藏）。
+ */
+export function noSignalExpiryAt(date: string): Date {
+  const next = nextTradingDateGuess(date);
+  if (!next || next === date) return new Date(0);
+  const parts = next.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return new Date(0);
+  return new Date(parts[0], parts[1] - 1, parts[2], 17, 0, 0, 0);
+}
+
+/**
+ * 「已记录」Tab 是否应展示该记录：
+ *  - 非 no_signal（普通记录 / snapshot_missing）恒 true，不受时间限制；
+ *  - no_signal 仅在 [记录日, T+1 17:00) 内可见，到点即从已记录 Tab 隐藏。
+ * 注意：「全部」Tab 不调用本函数，占位记录在那里永久保留供回溯。
+ */
+export function isRecordedTabVisible(record: WinRateRecord, now: Date = new Date()): boolean {
+  if (placeholderKind(record) !== 'no_signal') return true;
+  return now.getTime() < noSignalExpiryAt(record.date).getTime();
+}
+
+/**
+ * 从记录集合提取「已有真实交易记录」的日期集合。
+ * 占位记录（no_signal / snapshot_missing）不算：否则某日只有占位时，
+ * backfillCloseSnapshots 会误判该日已补拉完成，真实快照永远补不进来（漏票）。
+ */
+export function realRecordDates(records: WinRateRecord[]): Set<string> {
+  return new Set(
+    (Array.isArray(records) ? records : [])
+      .filter((r) => !isPlaceholderRecord(r))
+      .map((r) => r.date),
+  );
+}
+
 export interface MakePlaceholderOptions {
   date: string;
   kind: PlaceholderKind;

@@ -10,6 +10,7 @@ import {
   tradeViewCategory,
   placeholderKind,
   isPlaceholderRecord,
+  isRecordedTabVisible,
   type TradeViewCategory,
 } from '../domain/winrate';
 
@@ -98,7 +99,11 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
     // 「已记录」Tab 额外纳入两类审计占位记录；tradeViewCategory 本身口径不变（G5 零回归）。
     if (statusFilter !== 'all') {
       r = r.filter((x) => {
-        if (statusFilter === 'recorded' && isPlaceholderRecord(x)) return true;
+        if (statusFilter === 'recorded') {
+          // no_signal 占位仅展示到 T+1 交易日 17:00；「全部」Tab 不走这里，永久保留。
+          if (!isRecordedTabVisible(x)) return false;
+          if (isPlaceholderRecord(x)) return true;
+        }
         return tradeViewCategory(x) === statusFilter;
       });
     }
