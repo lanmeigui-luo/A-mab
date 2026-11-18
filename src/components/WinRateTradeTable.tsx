@@ -13,6 +13,7 @@ import {
   isRecordedTabVisible,
   type TradeViewCategory,
 } from '../domain/winrate';
+import { shouldShowIntradayUnfilled } from '../lib/trade-consistency';
 
 type SortKey = 'date' | 'strategyName' | 'returnPct';
 /** 'recorded' 为展示层分类（已记录/待买入），不是数据层 TradeStatus */
@@ -265,7 +266,7 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                           ? '无信号'
                           : placeholderKind(r) === 'snapshot_missing'
                           ? '快照缺失（当天软件未运行）'
-                          : r.trade.intradayEntryResolved === 'unfilled'
+                          : shouldShowIntradayUnfilled(r.trade)
                           ? '未成交（待复核）'
                           : TRADE_VIEW_STATUS_LABELS[category]}
                       </span>
@@ -274,7 +275,7 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                     <td className="wr-tags">
                       {r.trade.monitorBought && <span className="chip">盘中买入</span>}
                       {r.trade.monitorClosed && <span className="chip">盘中平仓</span>}
-                      {r.trade.intradayEntryResolved === 'unfilled' && (
+                      {shouldShowIntradayUnfilled(r.trade) && (
                         <span className="chip warn">盘中未成交·待复核</span>
                       )}
                       {r.trade.entrySource === 'daily_k' && <span className="chip muted">日K兜底</span>}

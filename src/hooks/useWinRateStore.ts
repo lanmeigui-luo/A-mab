@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import type { WinRateRecord, TradeRecord, MinuteResolveMeta } from '../domain/winrate';
 import { dedupeRecords, recordBusinessKey } from '../lib/record-dedupe';
+import { normalizeClosedTrade } from '../lib/trade-consistency';
 
 const STORAGE_KEY = 'radar.winrate.v1';
 const SCHEMA_VERSION = 1;
@@ -70,6 +71,9 @@ function migrateWinRateRecord(r: WinRateRecord): WinRateRecord {
       excludedFromStats: true,
     };
   }
+  // 【存量清理】历史脏数据：有 sellDate/sellPrice 却残留 unfilled 软标记 → 加载时洗掉，
+  // 保证「已平仓」记录不会在表格里显示「未成交（待复核）」。
+  if (next.trade) next.trade = normalizeClosedTrade(next.trade);
   return next;
 }
 

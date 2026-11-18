@@ -34,6 +34,7 @@ import { toFullCode, inferMarket } from '../src/lib/full-code';
 import * as fs from 'fs';
 import { dedupeRecords, recordBusinessKey } from '../src/lib/record-dedupe';
 import { intradayCleanupFields } from '../src/lib/intraday-cleanup';
+import { normalizeClosedTrade, shouldShowIntradayUnfilled, isClosedWithSell } from '../src/lib/trade-consistency';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2078,6 +2079,54 @@ function runPlaceholderLifecycleAssertion() {
   }
 }
 
+function runTradeConsistencyAssertion() {
+  const baseTrade: TradeRecord = {
+    buyDate: '2026-11-17', buyPrice: 10, sellDate: '2026-11-18', sellPrice: 9,
+    holdDays: 1, returnPct: -10, sellReason: 'stop_loss', status: 'closed',
+    anomalies: [], backfilled: false,
+  };
+
+  section('状态一致性 T1：已平仓残留 unfilled 软标记被强制清除');
+  {
+    const dirty = { ...baseTrade, intradayEntryResolved: 'unfilled' as const };
+    check(!isClosedWithSell(dirty) === false, 'sellDate+sellPrice+closed 判为已卖出');
+    const fixed = normalizeClosedTrade(dirty);
+    check(fixed.status === 'closed', 'status 仍为 closed');
+    check(fixed.intradayEntryResolved == null, 'unfilled 软标记已清（实际 ' + fixed.intradayEntryResolved + '）');
+    check(!shouldShowIntradayUnfilled(fixed), '不再显示「未成交（待复核）」');
+  }
+
+  section('状态一致性 T2：intraday_unfilled anomaly 一并清除');
+  {
+    const dirty = {
+      ...baseTrade,
+      intradayEntryResolved: 'unfilled' as const,
+      anomalies: ['intraday_unfilled'] as WinRateAnomaly[],
+    };
+    const fixed = normalizeClosedTrade(dirty);
+    check(!(fixed.anomalies || []).includes('intraday_unfilled'), '未成交异常标注已清');
+    check(fixed.intradayEntryResolved == null, '软标记已清');
+  }
+
+  section('状态一致性 T3：尚未平仓的 unfilled 软标记保持有效');
+  {
+    const open = {
+      ...baseTrade, status: 'open' as const, sellDate: null, sellPrice: null,
+      returnPct: null, intradayEntryResolved: 'unfilled' as const,
+    };
+    check(shouldShowIntradayUnfilled(open), 'open + unfilled 仍显示待复核');
+    check(normalizeClosedTrade(open).intradayEntryResolved === 'unfilled', '无卖出证据不被归一化改写');
+  }
+
+  section('状态一致性 T4：干净已平仓记录不被改写（引用稳定）');
+  {
+    const clean = { ...baseTrade, intradayEntryResolved: null };
+    const fixed = normalizeClosedTrade(clean);
+    check(fixed === clean, '干净记录原对象返回，零副作用');
+    check(isClosedWithSell(fixed), '已卖出判定为真');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2103,6 +2152,7 @@ async function main() {
   runRecordDedupeAssertion();
   runIntradayCleanupAssertion();
   runPlaceholderLifecycleAssertion();
+  runTradeConsistencyAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

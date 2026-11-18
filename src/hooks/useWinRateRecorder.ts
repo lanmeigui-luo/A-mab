@@ -600,6 +600,9 @@ export function useWinRateRecorder() {
           sellReason: trade.sellReason,
           status: trade.status,
           anomalies: trade.anomalies,
+          // 【2026-11-18 事故修复】simulateTrade 重算时已把盘中「未成交」软标记清成 null，
+          // 必须一并写回；否则 status/sellPrice 是已平仓、软标记却残留，表格会显示缝合怪。
+          intradayEntryResolved: trade.intradayEntryResolved,
           tPlus1SellDate,
           minuteResolve,
         });
