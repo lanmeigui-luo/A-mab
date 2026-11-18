@@ -14,6 +14,11 @@ import {
   type TradeViewCategory,
 } from '../domain/winrate';
 import { shouldShowIntradayUnfilled } from '../lib/trade-consistency';
+import { floatingReturnPct } from '../lib/floating-return';
+import { toFullCode } from '../lib/full-code';
+import { usePolling } from '../hooks/usePolling';
+import { marketApi } from '../services/market';
+import type { QuoteResponse } from '../domain/types';
 
 type SortKey = 'date' | 'strategyName' | 'returnPct';
 /** 'recorded' 为展示层分类（已记录/待买入），不是数据层 TradeStatus */
@@ -93,6 +98,30 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  // 【持仓浮盈】一次性提取所有 open + 有买入价的 fullCode，用 usePolling 30s 批量拉现价。
+  // 失败保留上次数据（usePolling 自带），拿不到就回退 '—'，绝不在渲染循环里单只请求。
+  const holdingCodes = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of records) {
+      if (r.trade.status === 'open' && r.trade.buyPrice != null) set.add(toFullCode(r.code));
+    }
+    return [...set].sort();
+  }, [records]);
+  const codesKey = holdingCodes.join(',');
+  const quoteResp = usePolling<QuoteResponse>(
+    () => marketApi.quotes(holdingCodes),
+    30_000,
+    [codesKey],
+    holdingCodes.length > 0,
+  );
+  const priceByCode = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const q of quoteResp.data?.rows ?? []) {
+      if (q?.price != null && q.price > 0) m.set(q.fullCode, q.price);
+    }
+    return m;
+  }, [quoteResp.data]);
 
   const rows = useMemo(() => {
     let r = records;
@@ -199,6 +228,12 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
               {rows.map((r) => {
                 const ret = r.trade.returnPct;
                 const category = tradeViewCategory(r);
+                // 持仓记录：用批量行情里的实时现价算浮动收益率；无现价回退 '—'
+                const isFloating = r.trade.status === 'open' && r.trade.buyPrice != null;
+                const livePrice = isFloating ? priceByCode.get(toFullCode(r.code)) : undefined;
+                const displayRet = isFloating
+                  ? floatingReturnPct(r.trade.buyPrice, livePrice)
+                  : ret;
                 const anomalies = r.trade.anomalies.map((a) => ANOMALY_LABELS[a]).join('、');
                 return (
                   <tr
@@ -241,10 +276,13 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                     <td className="num mono">{r.trade.holdDays == null ? '—' : r.trade.holdDays}</td>
                     <td
                       className={`num mono ${
-                        ret == null ? '' : ret >= 0 ? 'ret-pos' : 'ret-neg'
-                      }`}
+                        displayRet == null ? '' : displayRet >= 0 ? 'ret-pos' : 'ret-neg'
+                      }${isFloating ? ' wr-floating' : ''}`}
+                      title={isFloating ? '浮动盈亏（基于实时现价，30 秒刷新）' : '最终收益率'}
                     >
-                      {ret == null ? '—' : `${ret.toFixed(2)}%`}
+                      {displayRet == null
+                        ? '—'
+                        : `${isFloating && displayRet > 0 ? '+' : ''}${displayRet.toFixed(2)}%`}
                     </td>
                     <td>{placeholderKind(r) ? '—' : SELL_REASON_LABELS[r.trade.sellReason]}</td>
                     <td className="wr-rule-note">

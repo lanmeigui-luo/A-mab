@@ -25,6 +25,7 @@
     "src/lib/record-dedupe.ts",
     "src/lib/intraday-cleanup.ts",
     "src/lib/trade-consistency.ts",
+    "src/lib/floating-return.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

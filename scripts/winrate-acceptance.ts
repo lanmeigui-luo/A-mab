@@ -35,6 +35,7 @@ import * as fs from 'fs';
 import { dedupeRecords, recordBusinessKey } from '../src/lib/record-dedupe';
 import { intradayCleanupFields } from '../src/lib/intraday-cleanup';
 import { normalizeClosedTrade, shouldShowIntradayUnfilled, isClosedWithSell } from '../src/lib/trade-consistency';
+import { floatingReturnPct } from '../src/lib/floating-return';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2127,6 +2128,24 @@ function runTradeConsistencyAssertion() {
   }
 }
 
+function runFloatingReturnAssertion() {
+  section('浮动收益率 FLOAT：买入 10 元 / 现价 11 元 = +10%');
+  {
+    const r = floatingReturnPct(10, 11);
+    check(r === 10, '收益率 = 10（实际 ' + r + '）');
+    check(floatingReturnPct(10, 9) === -10, '亏损场景 = -10');
+    check(floatingReturnPct(10, 10) === 0, '持平 = 0');
+  }
+
+  section('浮动收益率 FLOAT：数据缺失/非法价格回退 null（UI 显示 —）');
+  {
+    check(floatingReturnPct(10, null) === null, '无现价 → null');
+    check(floatingReturnPct(null, 11) === null, '无买入价 → null');
+    check(floatingReturnPct(0, 11) === null, '买入价为 0 → null（不伪造无穷大）');
+    check(floatingReturnPct(10, Number.NaN) === null, 'NaN → null');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2153,6 +2172,7 @@ async function main() {
   runIntradayCleanupAssertion();
   runPlaceholderLifecycleAssertion();
   runTradeConsistencyAssertion();
+  runFloatingReturnAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

@@ -1337,8 +1337,11 @@ button.idx-card:hover {
 }
 
 /* 收益正负配色：正收益绿、负收益红（与涨跌方向相反，语义为盈亏） */
-.ret-pos { color: #16a34a; }
-.ret-neg { color: #dc2626; }
+/* A 股惯例：红涨绿跌（原为美股配色，2026-11-18 一并修正） */
+.ret-pos { color: #dc2626; }
+.ret-neg { color: #16a34a; }
+/* 持仓浮动收益率：轻微半透明 + 悬停提示，与已平仓的最终收益率区分 */
+.wr-floating { opacity: 0.85; font-style: italic; }
 .cb-mode .ret-pos { color: #1d4ed8; }
 .cb-mode .ret-neg { color: #b45309; }
 
