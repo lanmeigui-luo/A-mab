@@ -40,6 +40,7 @@ import { paginate } from '../src/lib/paginate';
 import * as path from 'path';
 import { matchesToolbarFilters, filterByToolbar } from '../src/lib/record-filters';
 import { intradayVolumeColor, setColorBlindMode } from '../src/lib/market-colors';
+import { friendlyMarketError, countBreadth, canUseStale, MARKET_FETCH_FAILED_TEXT } from '../src/lib/market-fallback';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2262,6 +2263,35 @@ function runIntradayVolumeColorAssertion() {
   }
 }
 
+function runMarketFallbackAssertion() {
+  section('大盘兜底 M1：底层报错不暴露给用户');
+  {
+    check(friendlyMarketError('ValueError: No tables found') === MARKET_FETCH_FAILED_TEXT, 'No tables found → 友好文案');
+    check(friendlyMarketError('ConnectionError: remote closed') === MARKET_FETCH_FAILED_TEXT, '连接失败 → 友好文案');
+    check(friendlyMarketError('Traceback ...') === MARKET_FETCH_FAILED_TEXT, '堆栈 → 友好文案');
+    check(friendlyMarketError(null) === MARKET_FETCH_FAILED_TEXT, '无原因 → 友好文案');
+  }
+  section('大盘兜底 M2：全市场快照统计涨跌家数');
+  {
+    const b = countBreadth([{ changePct: 3.2 }, { changePct: -1.5 }, { changePct: 0 }, { changePct: null }, { changePct: Number.NaN }]);
+    check(b?.up === 1 && b?.down === 1 && b?.flat === 1, '涨1跌1平1，无效价忽略');
+    check(countBreadth([]) === null, '空快照 → null，不伪造 0');
+    check(countBreadth([{ changePct: null }]) === null, '全无效 → null');
+  }
+  section('大盘兜底 M3：stale 回退判定');
+  {
+    check(canUseStale(false, 1000, 60000), '拉取失败且有旧快照 → 可用 stale');
+    check(!canUseStale(true, 1000, 60000), '拉取成功 → 不用 stale');
+    check(!canUseStale(false, null, 60000), '无旧快照 → 不用 stale');
+    const page = fs.readFileSync('src/components/MarketOverview.tsx', 'utf8');
+    check(page.includes('MARKET_STALE_TEXT'), '前端已显示「数据有延迟」');
+    const srv = fs.readFileSync('server/index.mjs', 'utf8');
+    check(srv.includes("sidecar('/market/spot')"), '后端已接入全市场快照备源');
+    check(srv.includes("staleMarketSnapshot('market-stats')"), '涨跌家数失败回退 stale');
+    check(srv.includes("staleMarketSnapshot('turnover')"), '成交额失败回退 stale');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2293,6 +2323,7 @@ async function main() {
   runPaginationComponentAssertion();
   runToolbarFilterAssertion();
   runIntradayVolumeColorAssertion();
+  runMarketFallbackAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

@@ -101,6 +101,23 @@ async function withCache(key, ttlMs, producer) {
   return { ...data, cached: false };
 }
 
+// 大盘关键指标 stale 快照：拉取失败时回退上次成功数据并标 is_stale（2026-11-19）
+const marketStaleStore = new Map();
+function rememberMarketSnapshot(key, data) {
+  if (data && data.available) marketStaleStore.set(key, { data, at: Date.now() });
+}
+function staleMarketSnapshot(key) {
+  const hit = marketStaleStore.get(key);
+  if (!hit) return null;
+  return {
+    ...hit.data,
+    available: true,
+    is_stale: true,
+    staleAgeMs: Date.now() - hit.at,
+    reason: null,
+  };
+}
+
 // ---------- 健康探测辅助 ----------
 
 // sidecar 当前提供的能力（静态清单；路由真实可用即视为具备）
@@ -858,27 +875,61 @@ async function marketTurnover() {
     // 分市场成交额（需求第五章）
     if (p === '/api/turnover') {
       const data = await withCache('turnover', 5000, () => marketTurnover());
-      return json(res, 200, { ...data, elapsedMs: null });
+      if (data.available) rememberMarketSnapshot('turnover', data);
+      const out = data.available ? data : (staleMarketSnapshot('turnover') ?? data);
+      return json(res, 200, { ...out, elapsedMs: null });
     }
 
     // 涨跌家数：走 AkShare sidecar（乐咕市场活跃度）
     if (p === '/api/market-stats') {
-      const data = await withCache('market-stats', 10000, () => sidecar('/market/stats'));
-      return json(res, 200, {
-        available: !!data.ok,
-        reason: data.ok ? null : data.reason,
-        up: data.up ?? null,
-        down: data.down ?? null,
-        flat: data.flat ?? null,
-        limitUp: data.limitUp ?? null,
-        limitDown: data.limitDown ?? null,
-        suspension: data.suspension ?? null,
-        source: 'akshare',
-        sourceLabel: 'AkShare（乐咕市场活跃度）',
-        elapsedMs: data.elapsedMs ?? null,
-        fetchedAt: data.fetchedAt ?? new Date().toISOString(),
-        cached: data.cached,
+      const data = await withCache('market-stats', 10000, async () => {
+        const unavailable = {
+          available: false,
+          up: null, down: null, flat: null,
+          limitUp: null, limitDown: null, suspension: null,
+          source: 'none', sourceLabel: '—',
+          reason: '获取失败（数据源波动），5秒后重试',
+          fetchedAt: new Date().toISOString(),
+        };
+        // L1 原主源：乐咕市场活跃度（AkShare 表格解析，网页结构变动会抛 No tables found）
+        try {
+          const r = await sidecar('/market/stats');
+          if (r?.ok && r.up != null && r.down != null) {
+            return {
+              available: true,
+              up: r.up, down: r.down, flat: r.flat ?? null,
+              limitUp: r.limitUp ?? null, limitDown: r.limitDown ?? null, suspension: r.suspension ?? null,
+              source: 'akshare', sourceLabel: 'AkShare（乐咕市场活跃度）',
+              reason: null, fetchedAt: r.fetchedAt ?? new Date().toISOString(),
+            };
+          }
+        } catch { /* 落 L2 */ }
+        // L2 备源：全市场行情快照（AkShare 东财 → 新浪，全市场约 5578 只，绝不 TopN 截断）
+        try {
+          const snap = await sidecar('/market/spot');
+          if (snap?.ok && Array.isArray(snap.rows) && snap.rows.length >= 100) {
+            let up = 0, down = 0, flat = 0;
+            for (const row of snap.rows) {
+              const c = Number(row?.changePct);
+              if (!Number.isFinite(c)) continue;
+              if (c > 0.0001) up++;
+              else if (c < -0.0001) down++;
+              else flat++;
+            }
+            if (up + down + flat >= 100) {
+              return {
+                available: true, up, down, flat,
+                limitUp: null, limitDown: null, suspension: null,
+                source: 'market-spot', sourceLabel: '全市场快照统计（涨跌幅）',
+                reason: null, fetchedAt: snap.fetchedAt ?? new Date().toISOString(),
+              };
+            }
+          }
+        } catch { /* 落不可用 */ }
+        return unavailable;
       });
+      if (data.available) rememberMarketSnapshot('market-stats', data);
+      return json(res, 200, data.available ? data : (staleMarketSnapshot('market-stats') ?? data));
     }
 
     // 市场情绪：涨停池（涨停家数 / 连板高度 / 炸板率）

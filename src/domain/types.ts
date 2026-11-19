@@ -96,6 +96,9 @@ export interface MinuteResponse {
 
 export interface MarketStats {
   available: boolean;
+  /** 拉取失败后回退到上次成功快照：数据有延迟，不是实时值 */
+  is_stale?: boolean;
+  staleAgeMs?: number;
   reason?: string | null;
   up: number | null;
   down: number | null;
@@ -129,6 +132,9 @@ export interface SentimentStats {
 /** 分市场成交额（需求第五章） */
 export interface TurnoverStats {
   available: boolean;
+  /** 拉取失败后回退到上次成功快照：数据有延迟，不是实时值 */
+  is_stale?: boolean;
+  staleAgeMs?: number;
   reason?: string | null;
   shYuan: number | null;
   szYuan: number | null;

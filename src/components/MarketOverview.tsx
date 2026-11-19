@@ -7,6 +7,7 @@ import {
   type TurnoverStats,
 } from '@/domain/types';
 import { changeColor, formatChange, formatPct } from '@/lib/market-colors';
+import { friendlyMarketError, MARKET_FETCH_FAILED_TEXT, MARKET_STALE_TEXT } from '@/lib/market-fallback';
 import { DASH, fmtIndex, fmtUpdatedAt } from '@/lib/format';
 
 interface Props {
@@ -103,15 +104,15 @@ export function MarketOverview({ resp, error, stats, sentiment, turnover, onOpen
                 {fmtAmount(turnover.bjYuan)}
               </div>
               <div className="metric-note muted">
-                {turnover.vsPrevYuan != null
+                {turnover.is_stale ? MARKET_STALE_TEXT : (turnover.vsPrevYuan != null
                   ? `较上一交易日同期 ${turnover.vsPrevYuan > 0 ? '+' : ''}${fmtAmount(Math.abs(turnover.vsPrevYuan))}`
-                  : (turnover.vsPrevReason ?? '同期增减待接入')}
+                  : (turnover.vsPrevReason ?? '同期增减待接入'))}
               </div>
             </>
           ) : (
             <>
-              <div className="metric-value muted">待接入</div>
-              <div className="metric-note">{turnover?.reason ?? '正在获取分市场成交额…'}</div>
+              <div className="metric-value muted">{MARKET_FETCH_FAILED_TEXT}</div>
+              <div className="metric-note">{friendlyMarketError(turnover?.reason)}</div>
             </>
           )}
         </div>
@@ -180,16 +181,20 @@ export function MarketOverview({ resp, error, stats, sentiment, turnover, onOpen
                 )}
               </div>
               <div className="metric-note">
-                涨停 {stats.limitUp ?? DASH} · 跌停 {stats.limitDown ?? DASH} · 停牌 {stats.suspension ?? DASH}
-                {stats.up != null && stats.down != null && stats.down > 0 && (
-                  <> · 涨跌比 {(stats.up / stats.down).toFixed(2)}</>
+                {stats.is_stale ? MARKET_STALE_TEXT : (
+                  <>
+                    涨停 {stats.limitUp ?? DASH} · 跌停 {stats.limitDown ?? DASH} · 停牌 {stats.suspension ?? DASH}
+                    {stats.up != null && stats.down != null && stats.down > 0 && (
+                      <> · 涨跌比 {(stats.up / stats.down).toFixed(2)}</>
+                    )}
+                  </>
                 )}
               </div>
             </>
           ) : (
             <>
-              <div className="metric-value muted">待接入</div>
-              <div className="metric-note">{stats?.reason ?? '正在获取全市场涨跌家数…'}</div>
+              <div className="metric-value muted">{MARKET_FETCH_FAILED_TEXT}</div>
+              <div className="metric-note">{friendlyMarketError(stats?.reason)}</div>
             </>
           )}
         </div>
