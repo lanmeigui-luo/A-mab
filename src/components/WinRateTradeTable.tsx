@@ -17,6 +17,7 @@ import { shouldShowIntradayUnfilled } from '../lib/trade-consistency';
 import { floatingReturnPct } from '../lib/floating-return';
 import { paginate } from '../lib/paginate';
 import { Pagination } from './Pagination';
+import { filterByToolbar } from '../lib/record-filters';
 import { toFullCode } from '../lib/full-code';
 import { usePolling } from '../hooks/usePolling';
 import { marketApi } from '../services/market';
@@ -103,9 +104,13 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
   // 分页：默认每页 100 条；pageSize=0 表示「全部」。Tab 或每页条数变化时回到第 1 页。
   const [pageSize, setPageSize] = useState<50 | 100 | 0>(100);
   const [page, setPage] = useState(1);
+  // 工具栏三条件：股票模糊搜索 / 战法单选 / 单日日期
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [filterStrategy, setFilterStrategy] = useState('');
+  const [filterDate, setFilterDate] = useState('');
   useEffect(() => {
     setPage(1);
-  }, [statusFilter, pageSize]);
+  }, [statusFilter, pageSize, searchKeyword, filterStrategy, filterDate]);
 
   // 【持仓浮盈】一次性提取所有 open + 有买入价的 fullCode，用 usePolling 30s 批量拉现价。
   // 失败保留上次数据（usePolling 自带），拿不到就回退 '—'，绝不在渲染循环里单只请求。
@@ -131,6 +136,14 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
     return m;
   }, [quoteResp.data]);
 
+  const strategyOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of records) {
+      if (r.strategyId && r.strategyName) m.set(r.strategyId, r.strategyName);
+    }
+    return [...m.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [records]);
+
   const rows = useMemo(() => {
     let r = records;
     // 按视图分类筛选：open 且 buyPrice==null 归「已记录」，「持仓中」严格为已买入未卖出。
@@ -145,6 +158,13 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
         return tradeViewCategory(x) === statusFilter;
       });
     }
+    // 工具栏三条件叠加在当前视图（statusFilter 结果）之上；日期按表格首列 actionDate 判定。
+    r = r.filter((x) =>
+      filterByToolbar(
+        [{ code: x.code, name: x.name, strategyId: x.strategyId, date: actionDate(x) }],
+        { keyword: searchKeyword, strategyId: filterStrategy, date: filterDate },
+      ).length > 0,
+    );
     // 若某日已有真实记录（快照事后补跑成功），剔除该日的 snapshot_missing 占位，避免状态矛盾。
     const realDates = new Set(
       records.filter((x) => !isPlaceholderRecord(x)).map((x) => x.date),
@@ -171,7 +191,7 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return arr;
-  }, [records, statusFilter, sortKey, sortDir]);
+  }, [records, statusFilter, sortKey, sortDir, searchKeyword, filterStrategy, filterDate]);
 
   // rows 已按日期倒序（默认 sortKey='date' / sortDir='desc'）排列，切片保证最新记录在第 1 页。
   const pageSlice = useMemo(() => paginate(rows, page, pageSize), [rows, page, pageSize]);
@@ -204,6 +224,31 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
               {s.l}
             </button>
           ))}
+        </div>
+        <div className="wr-table-filters">
+          <input
+            className="wr-filter-input"
+            type="search"
+            placeholder="搜代码/名称"
+            value={searchKeyword}
+            onChange={(e) => setSearchKeyword(e.target.value)}
+          />
+          <select
+            className="wr-filter-select"
+            value={filterStrategy}
+            onChange={(e) => setFilterStrategy(e.target.value)}
+          >
+            <option value="">全部战法</option>
+            {strategyOptions.map((o) => (
+              <option key={o.id} value={o.id}>{o.name}</option>
+            ))}
+          </select>
+          <input
+            className="wr-filter-input wr-filter-date"
+            type="date"
+            value={filterDate}
+            onChange={(e) => setFilterDate(e.target.value)}
+          />
         </div>
         <Pagination
           variant="inline"

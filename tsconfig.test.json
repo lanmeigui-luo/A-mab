@@ -27,6 +27,7 @@
     "src/lib/trade-consistency.ts",
     "src/lib/floating-return.ts",
     "src/lib/paginate.ts",
+    "src/lib/record-filters.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

@@ -38,6 +38,7 @@ import { normalizeClosedTrade, shouldShowIntradayUnfilled, isClosedWithSell } fr
 import { floatingReturnPct } from '../src/lib/floating-return';
 import { paginate } from '../src/lib/paginate';
 import * as path from 'path';
+import { matchesToolbarFilters, filterByToolbar } from '../src/lib/record-filters';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2195,6 +2196,42 @@ function runPaginationComponentAssertion() {
   }
 }
 
+function runToolbarFilterAssertion() {
+  const rows = [
+    { code: '600519', name: '贵州茅台', strategyId: 'first-board', date: '2026-11-19' },
+    { code: '000858', name: '五粮液', strategyId: 'trend-break', date: '2026-11-19' },
+    { code: '300528', name: '幸福蓝海', strategyId: 'first-board', date: '2026-11-18' },
+  ];
+  const empty = { keyword: '', strategyId: '', date: '' };
+
+  section('工具栏筛选 Q1：股票代码/名称模糊匹配');
+  {
+    check(filterByToolbar(rows, { ...empty, keyword: '茅台' }).length === 1, '关键词「茅台」→ 1 条');
+    check(filterByToolbar(rows, { ...empty, keyword: '600519' })[0]?.name === '贵州茅台', '代码精确片段命中');
+    check(filterByToolbar(rows, { ...empty, keyword: '茅' }).length === 1, '单字模糊命中');
+    check(filterByToolbar(rows, { ...empty, keyword: '不存在' }).length === 0, '无匹配 → 0 条');
+  }
+
+  section('工具栏筛选 Q2：战法与单日日期');
+  {
+    check(filterByToolbar(rows, { ...empty, strategyId: 'first-board' }).length === 2, '战法筛选 → 2 条');
+    check(filterByToolbar(rows, { ...empty, date: '2026-11-19' }).length === 2, '日期筛选 → 2 条');
+    check(filterByToolbar(rows, { ...empty, strategyId: 'first-board', date: '2026-11-18' }).length === 1,
+          '战法+日期叠加 → 1 条');
+  }
+
+  section('工具栏筛选 Q3：清空筛选恢复全部');
+  {
+    check(filterByToolbar(rows, empty).length === 3, '空条件 → 全部 3 条');
+    check(matchesToolbarFilters(rows[0], empty), '单条判定：空条件放行');
+    const table = fs.readFileSync('src/components/WinRateTradeTable.tsx', 'utf8');
+    check(table.includes('searchKeyword') && table.includes('filterStrategy') && table.includes('filterDate'),
+          '三个条件均已接入表格状态');
+    check(table.includes('[statusFilter, pageSize, searchKeyword, filterStrategy, filterDate]'),
+          '筛选变化时分页重置到第 1 页');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2224,6 +2261,7 @@ async function main() {
   runFloatingReturnAssertion();
   runPaginationAssertion();
   runPaginationComponentAssertion();
+  runToolbarFilterAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

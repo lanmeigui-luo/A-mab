@@ -1429,7 +1429,25 @@ button.idx-card:hover {
   margin-bottom: 10px;
 }
 /* 工具栏内的上方分页器：与 Tab 同行靠右，复用下方分页器全部样式 */
-.wr-pagination.wr-pagination-inline { padding: 0; }
+.wr-pagination.wr-pagination-inline { padding: 0; margin-left: auto; }
+/* 工具栏筛选控件：与 Tab、分页器同行，窄屏自动换行 */
+.wr-table-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wr-filter-input, .wr-filter-select {
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--panel-2, #1e1e1e);
+  color: inherit;
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+}
+.wr-filter-input { min-width: 130px; }
+.wr-filter-select { min-width: 110px; }
+.wr-filter-date { min-width: 132px; }
 .wr-th-sort {
   cursor: pointer;
   user-select: none;
