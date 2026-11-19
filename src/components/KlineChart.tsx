@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { KlineRow, MinuteRow } from '@/domain/types';
 import type { StrategyHit, TradePlan } from '@/domain/strategy';
-import { changeColor, formatPct, formatChange } from '@/lib/market-colors';
+import { changeColor, formatPct, formatChange, intradayVolumeColor } from '@/lib/market-colors';
 import { calcMA, calcBOLL, calcMACD, calcKDJ, calcRSI, rangeStats } from '@/lib/indicators';
 import type { MaSeries } from '@/lib/indicators';
 import { fmtNum, fmtVolume } from '@/lib/format';
@@ -189,14 +189,22 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
       // 成交量副图：只对 vol>0 的槽画柱，为 0 的分钟不画柱 = 留白
       const barW = Math.max(1, innerW / INTRADAY_SLOT_COUNT - 1);
       const volBars: IntradayVolBar[] = [];
+      // 【A股红涨绿跌】量柱按「当前分钟价 vs 上一分钟有效价」二值判色：
+      // >= 上一分钟（持平也算涨）→ 红；< → 绿。首分钟无上一分钟时用昨收，
+      // 昨收也缺失则按涨处理 —— 绝不再因 changeColor(0) 落 FLAT_COLOR 灰色。
+      let lastValidPrice: number | null = null;
       for (let s = 0; s < INTRADAY_SLOT_COUNT; s++) {
-        if (vol[s] > 0) {
-          volBars.push({
-            x: slotX(s) - barW / 2,
-            w: barW,
-            volTop: vy(vol[s]),
-            color: changeColor(prevClose != null ? (price[s] as number) - prevClose : 0),
-          });
+        const p = price[s];
+        if (p != null) {
+          if (vol[s] > 0) {
+            volBars.push({
+              x: slotX(s) - barW / 2,
+              w: barW,
+              volTop: vy(vol[s]),
+              color: intradayVolumeColor(p, lastValidPrice ?? prevClose),
+            });
+          }
+          lastValidPrice = p; // 用上一分钟有效价做下一根的基准，跳过午休 null 槽
         }
       }
 

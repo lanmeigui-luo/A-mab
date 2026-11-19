@@ -28,6 +28,8 @@
     "src/lib/floating-return.ts",
     "src/lib/paginate.ts",
     "src/lib/record-filters.ts",
+    "src/lib/market-colors.ts",
+    "src/lib/market-colors.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

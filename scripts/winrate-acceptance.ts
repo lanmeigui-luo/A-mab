@@ -39,6 +39,7 @@ import { floatingReturnPct } from '../src/lib/floating-return';
 import { paginate } from '../src/lib/paginate';
 import * as path from 'path';
 import { matchesToolbarFilters, filterByToolbar } from '../src/lib/record-filters';
+import { intradayVolumeColor, setColorBlindMode } from '../src/lib/market-colors';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2232,6 +2233,35 @@ function runToolbarFilterAssertion() {
   }
 }
 
+function runIntradayVolumeColorAssertion() {
+  section('分时量柱 V1：涨红跌绿，持平按涨处理');
+  {
+    check(intradayVolumeColor(11, 10) === '#DC2626', '11 >= 10 → 红');
+    check(intradayVolumeColor(10, 10) === '#DC2626', '10 >= 10（持平）→ 红，不再落灰');
+    check(intradayVolumeColor(9, 10) === '#16A34A', '9 < 10 → 绿');
+  }
+
+  section('分时量柱 V2：基准缺失不落灰');
+  {
+    check(intradayVolumeColor(10, null) === '#DC2626', '无昨收/无上一分钟 → 红');
+    check(intradayVolumeColor(10, undefined) === '#DC2626', 'undefined 基准 → 红');
+    check(intradayVolumeColor(10, Number.NaN) === '#DC2626', '非法基准 → 红');
+  }
+
+  section('分时量柱 V3：色盲模式暖冷色 + 渲染层已接入');
+  {
+    setColorBlindMode(true);
+    check(intradayVolumeColor(11, 10) === '#F59E0B', '色盲模式涨 → 暖色');
+    check(intradayVolumeColor(9, 10) === '#3B82F6', '色盲模式跌 → 冷色');
+    setColorBlindMode(false);
+    const chart = fs.readFileSync('src/components/KlineChart.tsx', 'utf8');
+    check(chart.includes('intradayVolumeColor(p, lastValidPrice ?? prevClose)'),
+          '量柱渲染改用上一分钟有效价判色');
+    check(!chart.includes('changeColor(prevClose != null ? (price[s] as number) - prevClose : 0)'),
+          '旧的「相对昨收 + changeColor(0)」判色已移除');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2262,6 +2292,7 @@ async function main() {
   runPaginationAssertion();
   runPaginationComponentAssertion();
   runToolbarFilterAssertion();
+  runIntradayVolumeColorAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

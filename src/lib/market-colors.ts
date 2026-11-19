@@ -140,6 +140,20 @@ export function changeColor(pct: number | null | undefined): string {
   return '#86EFAC';
 }
 
+/**
+ * 【分时成交量柱专用】按「当前分钟价 >= 基准价」做红涨绿跌二值判色。
+ *
+ * 不能用 changeColor(pct)：它对 0 返回 FLAT_COLOR 灰色，而分时量柱只要
+ * 相对上一分钟（或昨收）持平就算红（用户口径 >= 为涨），否则会出现整列灰柱。
+ * 基准缺失（首分钟且无昨收）时按红处理，绝不落灰色。
+ * 色盲模式沿用暖（涨）/冷（跌）双色，保证可辨。
+ */
+export function intradayVolumeColor(price: number, basePrice: number | null | undefined): string {
+  const up = basePrice == null || !Number.isFinite(basePrice) || price >= (basePrice as number);
+  if (colorBlindMode) return up ? '#F59E0B' : '#3B82F6';
+  return up ? '#DC2626' : '#16A34A';
+}
+
 /** 涨跌方向：1 涨 / -1 跌 / 0 平 */
 export function changeDirection(pct: number | null | undefined): 0 | 1 | -1 {
   if (pct == null || Number.isNaN(pct) || Math.abs(pct) < 0.0001) return 0;
