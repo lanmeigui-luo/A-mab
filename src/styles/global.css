@@ -1343,6 +1343,7 @@ button.idx-card:hover {
 /* 持仓浮动收益率：轻微半透明 + 悬停提示，与已平仓的最终收益率区分 */
 .wr-floating { opacity: 0.85; font-style: italic; }
 /* 交易明细分页器 */
+/* 分页器：显式浅色配色（原用未定义的 --panel-2 fallback 到 #1e1e1e，导致黑底） */
 .wr-pagination {
   display: flex;
   align-items: center;
@@ -1350,24 +1351,55 @@ button.idx-card:hover {
   gap: 12px;
   padding: 10px 2px 2px;
   font-size: 12px;
-  color: var(--text-muted, #888);
+  color: #6b7280;
 }
 .wr-page-btn {
   padding: 4px 10px;
-  border: 1px solid var(--border, #444);
+  border: 1px solid #d1d5db;
   border-radius: 4px;
-  background: var(--panel-2, #1e1e1e);
-  color: inherit;
+  background-color: #ffffff;
+  color: #374151;
   cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background-color 0.15s;
 }
-.wr-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.wr-page-btn:hover:not(:disabled) {
+  border-color: #2563eb;
+  color: #2563eb;
+  background-color: #eff6ff;
+}
+.wr-page-btn:active:not(:disabled) { background-color: #dbeafe; }
+.wr-page-btn:disabled {
+  background-color: #f3f4f6;
+  color: #9ca3af;
+  border-color: #e5e7eb;
+  cursor: not-allowed;
+}
 .wr-page-size select {
   margin-left: 6px;
   padding: 3px 6px;
-  background: var(--panel-2, #1e1e1e);
-  color: inherit;
-  border: 1px solid var(--border, #444);
+  background-color: #ffffff;
+  color: #374151;
+  border: 1px solid #d1d5db;
   border-radius: 4px;
+  color-scheme: light;
+  cursor: pointer;
+}
+.wr-page-size select:hover { border-color: #2563eb; color: #2563eb; }
+@media (prefers-color-scheme: dark) {
+  .wr-pagination { color: #9ca3af; }
+  .wr-page-btn {
+    background-color: #374151;
+    color: #f3f4f6;
+    border-color: #4b5563;
+  }
+  .wr-page-btn:hover:not(:disabled) { border-color: #60a5fa; color: #93c5fd; background-color: #1f2937; }
+  .wr-page-btn:disabled { background-color: #1f2937; color: #6b7280; border-color: #374151; }
+  .wr-page-size select {
+    background-color: #374151;
+    color: #f3f4f6;
+    border-color: #4b5563;
+    color-scheme: dark;
+  }
 }
 .cb-mode .ret-pos { color: #1d4ed8; }
 .cb-mode .ret-neg { color: #b45309; }
