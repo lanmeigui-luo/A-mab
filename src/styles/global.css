@@ -1437,17 +1437,37 @@ button.idx-card:hover {
   gap: 8px;
   flex-wrap: wrap;
 }
-.wr-filter-input, .wr-filter-select {
+/* 筛选控件：显式浅色配色（原用未定义的 --panel-2 fallback 到 #1e1e1e，导致黑底黑字） */
+.wr-filter-input, .wr-filter-select, .wr-filter-date {
   padding: 4px 8px;
   font-size: 12px;
-  background: var(--panel-2, #1e1e1e);
-  color: inherit;
-  border: 1px solid var(--border, #444);
+  background-color: #ffffff;
+  color: #1f2937;
+  border: 1px solid #d1d5db;
   border-radius: 4px;
+  outline: none;
+  /* 让原生 select 与日期弹出层使用浅色方案，避免黑底黑字的下拉选项 */
+  color-scheme: light;
+}
+.wr-filter-input::placeholder { color: #9ca3af; opacity: 1; }
+.wr-filter-input:focus, .wr-filter-select:focus, .wr-filter-date:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
 }
 .wr-filter-input { min-width: 130px; }
 .wr-filter-select { min-width: 110px; }
 .wr-filter-date { min-width: 132px; }
+/* 系统暗色偏好：深灰底 + 浅白字，日期图标反色保证可见 */
+@media (prefers-color-scheme: dark) {
+  .wr-filter-input, .wr-filter-select, .wr-filter-date {
+    background-color: #374151;
+    color: #f3f4f6;
+    border-color: #4b5563;
+    color-scheme: dark;
+  }
+  .wr-filter-input::placeholder { color: #9ca3af; }
+  .wr-filter-date::-webkit-calendar-picker-indicator { filter: invert(1); }
+}
 .wr-th-sort {
   cursor: pointer;
   user-select: none;
