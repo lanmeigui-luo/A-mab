@@ -16,6 +16,7 @@
 import type { WinRateRecord, SellReason } from '../domain/winrate';
 import type { WinRateTradePatch } from '../hooks/useWinRateStore';
 import { disambiguateIntraday, tradingDaysBetween, type MinuteBar } from './winrate-minute';
+import { isSameDayClose } from './trade-plan-validity';
 import { intradayCleanupFields } from './intraday-cleanup';
 
 /** 一笔记录的买卖计划（止损 / 目标一 / 目标二） */
@@ -72,7 +73,10 @@ function r2(x: number): number {
 export function buildIntradayClosePatch(
   record: WinRateRecord,
   trigger: IntradayTrigger,
-): WinRateTradePatch {
+): WinRateTradePatch | null {
+  // 【绝对硬拦截】买入日与卖出日相同 → 违反 A 股 T+1，直接拒绝生成平仓补丁。
+  const sellDateGuard = trigger.barDate.length >= 10 ? trigger.barDate.slice(0, 10) : trigger.barDate;
+  if (isSameDayClose(record.trade.buyDate, sellDateGuard)) return null;
   const buyPrice = record.trade.buyPrice;
   const sellPrice = trigger.sellPrice;
   const returnPct =

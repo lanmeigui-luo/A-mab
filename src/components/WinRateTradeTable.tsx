@@ -384,6 +384,9 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                       )}
                       {r.trade.entrySource === 'daily_k' && <span className="chip muted">日K兜底</span>}
                       {r.trade.excludedFromStats && <span className="chip warn">已排除分母</span>}
+                      {r.trade.anomalies.includes('t_plus_1_violation') && (
+                        <span className="chip warn">T+1 违规</span>
+                      )}
                       {r.trade.sellReason === 'ambiguous_intraday' && (
                         <span className="chip muted">歧义</span>
                       )}

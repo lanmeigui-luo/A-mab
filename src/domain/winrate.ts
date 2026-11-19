@@ -111,7 +111,8 @@ export type WinRateAnomaly =
   | 'param_changed' // 参数版本变更
   | 'no_signal' // 当日全市场无符合该战法条件的标的（占位记录）
   | 'snapshot_missing' // 该交易日无收盘快照（自动任务未运行）
-  | 'intraday_unfilled'; // 14:55 选中但 14:57 复核未成交（价格超出买入区间/停牌）
+  | 'intraday_unfilled'
+  | 't_plus_1_violation'; // 同日买卖，违反 T+1（已排除分母） // 14:55 选中但 14:57 复核未成交（价格超出买入区间/停牌）
 
 /** 异常标注中文文案（唯一出处；逻辑层只用 key） */
 export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
@@ -132,6 +133,7 @@ export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
   no_signal: '当日全市场无符合该战法条件的标的',
   snapshot_missing: '快照缺失（当天未生成收盘快照）',
   intraday_unfilled: '14:57 复核未成交（价格超出买入区间）',
+  t_plus_1_violation: 'T+1 违规（同日买卖，已排除分母）',
   high_open_over_target1: '高开越过目标一(未成交)',
 };
 
@@ -514,8 +516,12 @@ export function genWinRateRecordId(): string {
  */
 export function canSellToday(record: WinRateRecord, today: string): boolean {
   const buyDate = record.trade.buyDate;
+  // 第一道绝对锁：买入当日无论触及什么价位都禁止卖出，先看日期字符串本身。
   if (!buyDate || today <= buyDate) return false;
-  return record.tPlus1SellDate == null || today >= record.tPlus1SellDate;
+  // 第二道：tPlus1SellDate 缺失时按「跳过周末」的下一交易日兜底，
+  // 绝不让缺失字段把 T+1 防线整体短路（2026-11-19 事故直接成因之一）。
+  const sellFloor = record.tPlus1SellDate ?? nextTradingDateGuess(buyDate);
+  return today >= sellFloor;
 }
 
 /**

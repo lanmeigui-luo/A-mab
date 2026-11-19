@@ -31,6 +31,7 @@
     "src/lib/market-colors.ts",
     "src/lib/market-fallback.ts",
     "src/lib/prev-close.ts",
+    "src/lib/trade-plan-validity.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

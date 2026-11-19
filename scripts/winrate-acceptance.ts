@@ -42,6 +42,7 @@ import { matchesToolbarFilters, filterByToolbar } from '../src/lib/record-filter
 import { intradayVolumeColor, setColorBlindMode } from '../src/lib/market-colors';
 import { friendlyMarketError, countBreadth, canUseStale, MARKET_FETCH_FAILED_TEXT } from '../src/lib/market-fallback';
 import { resolvePrevClose, calcPrevChange, isUsablePrevClose, firstValidPrice } from '../src/lib/prev-close';
+import { isPlanTradable, isSameDayClose } from '../src/lib/trade-plan-validity';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -1594,7 +1595,8 @@ function runEntryEngineAssertion() {
     r.trade.buyDate = '2026-01-02';
     check(canSellToday(r, '2026-01-02') === false, '买入当日（today === buyDate）绝对禁止卖出');
     check(canSellToday(r, '2026-01-01') === false, 'today < buyDate → 禁止卖出');
-    check(canSellToday(r, '2026-01-03') === true, 'tPlus1SellDate 缺省 → T+1 日可卖');
+    check(canSellToday(r, '2026-01-03') === false, 'tPlus1SellDate 缺省 → 周末不可卖');
+    check(canSellToday(r, '2026-01-05') === true, 'tPlus1SellDate 缺省 → 下一交易日(周一)可卖');
     r.tPlus1SellDate = '2026-01-06';
     check(canSellToday(r, '2026-01-03') === false, '停牌顺延：未到 tPlus1SellDate → 禁止');
     check(canSellToday(r, '2026-01-06') === true, '到达 tPlus1SellDate → 可卖');
@@ -2323,6 +2325,42 @@ function runPrevCloseAssertion() {
   }
 }
 
+function runT1AndPlanAssertion() {
+  section('T+1 硬锁 T1：同日买卖绝对拒绝');
+  {
+    check(isSameDayClose('2026-11-18', '2026-11-18'), '11-18 买 11-18 卖 → 违规');
+    check(!isSameDayClose('2026-11-18', '2026-11-19'), '隔日买卖合法');
+    check(!isSameDayClose(null, '2026-11-18'), '无买入日不算违规');
+    const open = { date: '2026-11-17', trade: { status: 'open' as const, buyDate: '2026-11-18' } } as WinRateRecord;
+    check(!canSellToday(open, '2026-11-18'), '买入当日禁止卖出');
+    check(!canSellToday(open, '2026-11-17'), '记录日早于买入日禁止卖出');
+  }
+
+  section('计划完整性 T2：残缺/倒挂计划不可交易');
+  {
+    check(!isPlanTradable({ buyLow: null, buyHigh: 12.09, stop: null, target1: null, target2: 11.79 }),
+          '截图中的残缺计划直接拒绝');
+    check(!isPlanTradable({ buyLow: 11.8, buyHigh: 12.09, stop: 11.5, target1: 12, target2: 11.79 }),
+          '目标二低于买入上限 → 倒挂拒绝');
+    check(isPlanTradable({ buyLow: 11.8, buyHigh: 12.09, stop: 11.5, target1: 12.8, target2: 13.5 }),
+          '完整且目标递增的计划放行');
+  }
+
+  section('T+1 硬锁 T3：三层防御已落到代码');
+  {
+    const mon = fs.readFileSync('src/hooks/useIntradayMonitor.ts', 'utf8');
+    check(mon.includes('const dayBars = sliceDayBars(bars, today);'), '卖出端只用当日 bar');
+    check(mon.includes('isSameDayClose(r.trade.buyDate, trigger.barDate.slice(0, 10))'), '卖出前硬拦截同日');
+    check(mon.includes('isPlanTradable('), '买入前拦截残缺计划');
+    const trig = fs.readFileSync('src/lib/intraday-trigger.ts', 'utf8');
+    check(trig.includes('): WinRateTradePatch | null {'), '平仓补丁可返回 null 拒绝');
+    const store = fs.readFileSync('src/hooks/useWinRateStore.ts', 'utf8');
+    check(store.includes('t_plus_1_violation'), '存量脏数据自动标 T+1 违规');
+    const win = fs.readFileSync('src/domain/winrate.ts', 'utf8');
+    check(win.includes('nextTradingDateGuess(buyDate)'), 'tPlus1SellDate 缺失时用下一交易日兜底');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2356,6 +2394,7 @@ async function main() {
   runIntradayVolumeColorAssertion();
   runMarketFallbackAssertion();
   runPrevCloseAssertion();
+  runT1AndPlanAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

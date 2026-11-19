@@ -2,6 +2,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 import type { WinRateRecord, TradeRecord, MinuteResolveMeta } from '../domain/winrate';
 import { dedupeRecords, recordBusinessKey } from '../lib/record-dedupe';
 import { normalizeClosedTrade } from '../lib/trade-consistency';
+import { isSameDayClose } from '../lib/trade-plan-validity';
 
 const STORAGE_KEY = 'radar.winrate.v1';
 const SCHEMA_VERSION = 1;
@@ -73,7 +74,19 @@ function migrateWinRateRecord(r: WinRateRecord): WinRateRecord {
   }
   // 【存量清理】历史脏数据：有 sellDate/sellPrice 却残留 unfilled 软标记 → 加载时洗掉，
   // 保证「已平仓」记录不会在表格里显示「未成交（待复核）」。
-  if (next.trade) next.trade = normalizeClosedTrade(next.trade);
+  if (next.trade) {
+    // 【T+1 脏数据清洗】同日买卖属违规记录：标记为 anomaly 并排除分母，绝不静默统计。
+    if (isSameDayClose(next.trade.buyDate, next.trade.sellDate)) {
+      next.trade = {
+        ...next.trade,
+        status: 'anomaly',
+        excludedFromStats: true,
+        invalidReason: '违规同日买卖（T+1 击穿），已排除统计',
+        anomalies: [...new Set([...(next.trade.anomalies || []), 't_plus_1_violation' as never])],
+      };
+    }
+    next.trade = normalizeClosedTrade(next.trade);
+  }
   return next;
 }
 

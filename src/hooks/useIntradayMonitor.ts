@@ -39,6 +39,7 @@ import { marketApi } from '../services/market';
 import { isWithinTradingHours, RECORD_CUTOFF_MINS, isWeekday } from '../lib/tradingTime';
 import { evaluateIntradayTrigger, buildIntradayClosePatch } from '../lib/intraday-trigger';
 import { intradayCleanupFields } from '../lib/intraday-cleanup';
+import { isPlanTradable, isSameDayClose } from '../lib/trade-plan-validity';
 import {
   evaluateIntradayEntry,
   sliceDayBars,
@@ -100,7 +101,9 @@ function getPendingEntries(today: string): WinRateRecord[] {
       r.trade.intradayEntryResolved == null &&
       r.entryStyle != null &&
       r.entryStyle !== 'daily_only' &&
-      r.entryTargetDate === today,
+      r.entryTargetDate === today &&
+      // 计划残缺（止损/目标缺失或目标倒挂）→ 不允许盘中买入，等快照重算完整后再说
+      isPlanTradable({ buyLow: r.buyLow, buyHigh: r.buyHigh, stop: r.stop, target1: r.target1, target2: r.target2 }),
   );
 }
 
@@ -215,8 +218,11 @@ function processCode(
 ): void {
   if (!bars.length) return;
   const cursor = lastCursor.get(code);
-  const newBars = cursor ? bars.filter((b) => b.date > cursor) : bars;
-  const dayBars = sliceDayBars(bars, today); // 买入判定必须切片当日，避免缺口回填串日
+  // 【T+1 事故修复】买入/卖出都必须只处理【当日】bar。
+  // 旧实现卖出端用 newBars（首次运行时 cursor 为空 = 全部历史 bar），
+  // 历史 bar 的日期被写成 sellDate，而 T+1 判定用的是 today，直接击穿同日买卖锁。
+  const dayBars = sliceDayBars(bars, today);
+  const newBars = cursor ? dayBars.filter((b) => b.date > cursor) : dayBars;
   const q = quotes.get(code);
 
   // ── 卖出端 ──
@@ -229,7 +235,12 @@ function processCode(
         target1: r.target1,
         target2: r.target2,
       });
-      if (trigger) updateTrade(r.id, buildIntradayClosePatch(r, trigger));
+      if (!trigger) continue;
+  // 第三道硬拦截：卖出行日期绝不能等于买入日；trigger.barDate 也要落在 today。
+      if (isSameDayClose(r.trade.buyDate, trigger.barDate.slice(0, 10))) continue;
+      if (trigger.barDate.slice(0, 10) !== today) continue;
+      const patch = buildIntradayClosePatch(r, trigger);
+      if (patch) updateTrade(r.id, patch);
     }
   }
 
