@@ -1,5 +1,6 @@
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { usePolling } from '@/hooks/usePolling';
+import { resolvePrevClose, calcPrevChange } from '@/lib/prev-close';
 import { marketApi, type EvalResponse } from '@/services/market';
 import { KlineChart, type SubIndicator } from '@/components/KlineChart';
 import { DeepAnalysis } from '@/components/DeepAnalysis';
@@ -76,6 +77,26 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
   const isIntraday = period === 'minute';
   const isMinute = period.startsWith('m') && period !== 'month';
 
+  // 【prevClose 防污染】详情页自己拉实时行情，不依赖父组件自选股轮询的旧快照。
+  // 父组件传入的 quote 仅作首帧占位，实时值到达后立刻覆盖。
+  const liveQuoteResp = usePolling<QuoteResponse>(
+    () => marketApi.quotes([fullCode]),
+    5000,
+    [fullCode],
+  );
+  const liveQuote = liveQuoteResp.data?.rows?.[0] ?? quote;
+  // 昨收基准兜底：日K倒数第二根（不复权），比 quote.prevClose 更可靠；只拉 3 根，开销可忽略。
+  const baseKline = usePolling<KlineResponse>(
+    () => marketApi.kline(fullCode, 'day', 'none', 3),
+    60000,
+    [fullCode],
+  );
+  const klineRows = baseKline.data?.rows ?? [];
+  const klinePrevClose = klineRows.length >= 2 ? klineRows[klineRows.length - 2]?.close : null;
+  // 优先级：日K倒数第二根 > 实时 quote.prevClose；拿不到就是 null，绝不拿当前价凑数。
+  const effectivePrevClose = resolvePrevClose(klinePrevClose, liveQuote?.prevClose);
+  const effectiveChange = calcPrevChange(liveQuote?.price ?? null, effectivePrevClose);
+
   // 分时（腾讯当日分钟序列）：仅在分时周期激活轮询，避免空轮询
   const minute = usePolling<MinuteResponse>(
     () => marketApi.minute(fullCode),
@@ -136,7 +157,7 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
     if (isIntraday) {
       const rows = minute.data?.rows ?? [];
       const last = rows[rows.length - 1];
-      const prevClose = quote?.prevClose;
+      const prevClose = effectivePrevClose;
       lines.push(
         `分时（腾讯当日分钟序列，数据源 ${minute.data?.sourceLabel ?? DASH}）：共 ${rows.length} 个分钟点`,
       );
@@ -178,7 +199,7 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
     return lines.join('\n');
   }, [quote, name, fullCode, minute.data, kline.data, period, fq, isIntraday, isMinute, visibleRows]);
 
-  const color = changeColor(quote?.changePct ?? null);
+  const color = changeColor(effectiveChange?.changePct ?? null);
 
   // P5a：个股联动 —— 复用 store + computeWinRateStats / filterWinRateRecords，按 6 位 code 过滤
   const wr = useWinRateStore();
@@ -218,13 +239,13 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
         <h2>{quote?.name ?? name}</h2>
         <span className="mono muted">{fullCode}</span>
         <span className="price" style={{ color }}>
-          {fmtNum(quote?.price ?? null)}
+          {fmtNum(liveQuote?.price ?? null)}
+        </span>
+        <span className="pct" style={{ color }} title={effectivePrevClose == null ? '无基准价' : undefined}>
+          {effectiveChange ? formatPct(effectiveChange.changePct) + '%' : (liveQuote ? '无基准价' : DASH)}
         </span>
         <span className="pct" style={{ color }}>
-          {quote ? formatPct(quote.changePct) + '%' : DASH}
-        </span>
-        <span className="pct" style={{ color }}>
-          {formatChange(quote?.change ?? null)}
+          {effectiveChange ? formatChange(effectiveChange.change) : DASH}
         </span>
         <span className="spacer" />
         <button className="btn" onClick={onClose}>
@@ -327,7 +348,7 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
             rows={isIntraday ? [] : visibleRows}
             precomputedMa={isIntraday ? null : precomputedMa}
             intraday={isIntraday ? (minute.data?.rows ?? []) : null}
-            prevClose={quote?.prevClose}
+            prevClose={effectivePrevClose}
             showMa={showMa}
             showBoll={showBoll}
             sub={sub}

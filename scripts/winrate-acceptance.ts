@@ -41,6 +41,7 @@ import * as path from 'path';
 import { matchesToolbarFilters, filterByToolbar } from '../src/lib/record-filters';
 import { intradayVolumeColor, setColorBlindMode } from '../src/lib/market-colors';
 import { friendlyMarketError, countBreadth, canUseStale, MARKET_FETCH_FAILED_TEXT } from '../src/lib/market-fallback';
+import { resolvePrevClose, calcPrevChange, isUsablePrevClose, firstValidPrice } from '../src/lib/prev-close';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2292,6 +2293,36 @@ function runMarketFallbackAssertion() {
   }
 }
 
+function runPrevCloseAssertion() {
+  section('昨收基准 P1：跌停票按真实昨收算出 -10%');
+  {
+    const c = calcPrevChange(11.17, 12.41);
+    check(c != null && c.change === -1.24, '涨跌额 -1.24（实际 ' + c?.change + '）');
+    check(c != null && Math.abs(c.changePct - (-9.99)) < 0.02, '涨跌幅约 -9.99%（实际 ' + c?.changePct + '）');
+  }
+
+  section('昨收基准 P2：来源优先级（日K > quote），污染值不参与');
+  {
+    check(resolvePrevClose(12.41, 11.17) === 12.41, '日K基准优先于被污染的 quote.prevClose');
+    check(resolvePrevClose(null, 12.41) === 12.41, '日K缺失时用实时 quote 基准');
+    check(resolvePrevClose(null, null) === null, '两路都缺 → null，不拿当前价凑数');
+    check(resolvePrevClose(0, -1, Number.NaN, 12.41) === 12.41, '非法候选全跳过');
+    check(!isUsablePrevClose(0) && !isUsablePrevClose(Number.NaN), '0 / NaN 不是可用昨收');
+  }
+
+  section('昨收基准 P3：缺基准时不显示 0.00%，UI 与渲染层已接入');
+  {
+    check(calcPrevChange(11.17, null) === null, '无基准 → null，UI 显示「无基准价」');
+    check(calcPrevChange(null, 12.41) === null, '无现价 → null');
+    check(firstValidPrice([null, 11.2, 11.17]) === 11.2, '分时首根有效价仅用于纵轴范围');
+    const page = fs.readFileSync('src/components/StockDetail.tsx', 'utf8');
+    check(page.includes('liveQuoteResp'), '详情页自拉实时行情');
+    check(page.includes("marketApi.kline(fullCode, 'day', 'none', 3)"), '日K倒数第二根兜底');
+    check(page.includes('prevClose={effectivePrevClose}'), '图表使用有效基准');
+    check(page.includes('无基准价'), '缺基准时显式提示');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2324,6 +2355,7 @@ async function main() {
   runToolbarFilterAssertion();
   runIntradayVolumeColorAssertion();
   runMarketFallbackAssertion();
+  runPrevCloseAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

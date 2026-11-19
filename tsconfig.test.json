@@ -30,6 +30,7 @@
     "src/lib/record-filters.ts",
     "src/lib/market-colors.ts",
     "src/lib/market-fallback.ts",
+    "src/lib/prev-close.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }
