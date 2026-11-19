@@ -90,6 +90,14 @@ function projectHit(hit) {
       stop: hit.tradePlan?.stop ?? null,
       target1: hit.tradePlan?.target1 ?? null,
       target2: hit.tradePlan?.target2 ?? null,
+      // 【买入区间空值原因】后端 buildTradePlan 已给出，必须透传，前端才能解释 '—'
+      buyBasis: hit.tradePlan?.buyBasis ?? null,
+      buyBlockedByLimitUp: hit.tradePlan?.buyBlockedByLimitUp === true,
+      missing: Array.isArray(hit.tradePlan?.missing) ? hit.tradePlan.missing : [],
+      // 【买入区间空值原因】后端 buildTradePlan 已给出，必须透传，前端才能解释 '—'
+      buyBasis: hit.tradePlan?.buyBasis ?? null,
+      buyBlockedByLimitUp: hit.tradePlan?.buyBlockedByLimitUp === true,
+      missing: Array.isArray(hit.tradePlan?.missing) ? hit.tradePlan.missing : [],
     },
   };
 }

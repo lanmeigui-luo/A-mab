@@ -43,6 +43,7 @@ import { intradayVolumeColor, setColorBlindMode } from '../src/lib/market-colors
 import { friendlyMarketError, countBreadth, canUseStale, MARKET_FETCH_FAILED_TEXT } from '../src/lib/market-fallback';
 import { resolvePrevClose, calcPrevChange, isUsablePrevClose, firstValidPrice } from '../src/lib/prev-close';
 import { isPlanTradable, isSameDayClose } from '../src/lib/trade-plan-validity';
+import { describeBuyRange } from '../src/lib/buy-range-label';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2361,6 +2362,39 @@ function runT1AndPlanAssertion() {
   }
 }
 
+function runBuyRangeLabelAssertion() {
+  section('买入区间 B1：正常区间原样展示');
+  {
+    const r = describeBuyRange({ buyLow: 12, buyHigh: 12.24, buyBasis: '现价 ±1%' });
+    check(r.text === '12~12.24' && r.tone === 'normal', '区间文案正常（实际 ' + r.text + '）');
+  }
+
+  section('买入区间 B2：涨停封板给出明确文案与告警色');
+  {
+    const r = describeBuyRange({
+      buyLow: null, buyHigh: null,
+      buyBlockedByLimitUp: true,
+      buyBasis: '涨停不可买入（止损与目标以现价为参考，供次日使用）',
+    });
+    check(r.text === '当日封板涨停，无法买入', '文案 = 当日封板涨停，无法买入');
+    check(r.tone === 'warn', 'tone=warn，UI 用橙黄色');
+  }
+
+  section('买入区间 B3：其他缺失原因不显示裸破折号');
+  {
+    const none = describeBuyRange({ buyLow: null, buyBasis: '未命中任何可用战法，不给出买入区间' });
+    check(none.text === '未命中可用战法，未生成区间', '未命中战法 → 明确文案');
+    const miss = describeBuyRange({ buyLow: null, buyBasis: 'MA10 缺失，无法给出低吸区间', missing: ['MA10'] });
+    check(miss.text === '数据拉取失败，未生成区间', '数据缺失 → 明确文案');
+    check(miss.tone === 'warn', '均为告警色');
+    const modal = fs.readFileSync('src/components/WinRateTradeDetailModal.tsx', 'utf8');
+    check(modal.includes('describeBuyRange('), '详情弹窗已接入统一口径');
+    const snap = fs.readFileSync('server/winrateSnapshot.mjs', 'utf8');
+    check(snap.includes('buyBlockedByLimitUp: hit.tradePlan?.buyBlockedByLimitUp === true'),
+          '后端已透传涨停标识');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2395,6 +2429,7 @@ async function main() {
   runMarketFallbackAssertion();
   runPrevCloseAssertion();
   runT1AndPlanAssertion();
+  runBuyRangeLabelAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

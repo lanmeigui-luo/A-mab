@@ -398,6 +398,10 @@ export interface WinRateRecord {
   /** 买入区间（元）；拿不到为 null */
   buyLow: number | null;
   buyHigh: number | null;
+  /** 买入区间空值原因（涨停 / 未命中战法 / 数据缺失），旧记录缺省 */
+  buyBasis?: string | null;
+  buyBlockedByLimitUp?: boolean;
+  missing?: string[];
   /** 止损价（元）；拿不到为 null */
   stop: number | null;
   /** 目标价（元）；拿不到为 null */
@@ -571,6 +575,12 @@ export interface WinRateSnapshotHit {
     target2: number | null;
     /** 买入时机（收盘买入 / 次日开盘买入）；后端未下发时前端按策略配置回填 */
     buyTiming?: BuyTiming;
+    /** 买入区间生成依据 / 空值原因（涨停、未命中战法、数据缺失） */
+    buyBasis?: string | null;
+    /** 当日封板涨停导致无法买入（后端直接给出的判定） */
+    buyBlockedByLimitUp?: boolean;
+    /** 计划计算时缺失的输入字段清单 */
+    missing?: string[];
   };
   /**
    * 【方案 D】14:57 复核确认的买入价（元）。仅尾盘类战法（隔夜持股）由后端写入：

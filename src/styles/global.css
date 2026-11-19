@@ -1462,6 +1462,9 @@ button.idx-card:hover {
 }
 /* 工具栏内的上方分页器：与 Tab 同行靠右，复用下方分页器全部样式 */
 .wr-pagination.wr-pagination-inline { padding: 0; margin-left: auto; }
+/* 买入区间无法生成的明确提示：橙黄色，一眼可辨 */
+.wr-buy-blocked { color: #d97706 !important; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .wr-buy-blocked { color: #fbbf24 !important; } }
 /* 工具栏筛选控件：与 Tab、分页器同行，窄屏自动换行 */
 .wr-table-filters {
   display: flex;

@@ -32,6 +32,7 @@
     "src/lib/market-fallback.ts",
     "src/lib/prev-close.ts",
     "src/lib/trade-plan-validity.ts",
+    "src/lib/buy-range-label.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

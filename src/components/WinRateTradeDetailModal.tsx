@@ -164,6 +164,8 @@ function MiniKline({
  * 单笔交易详情（P5b，纯展示，绝不可修改记录；居中弹层）。
  * 三块纵向排列：A 基础信息 & 因子贡献 / B 交易点 K 线图 / C 战法规则说明。
  */
+import { describeBuyRange } from '../lib/buy-range-label';
+
 export function WinRateTradeDetailModal({
   record,
   onClose,
@@ -356,10 +358,11 @@ export function WinRateTradeDetailModal({
               <div className="plan-grid">
                 <div>
                   <span>买入区间</span>
-                  <strong className="mono">
-                    {record.buyLow != null && record.buyHigh != null
-                      ? `${fmtNum(record.buyLow)}~${fmtNum(record.buyHigh)}`
-                      : '—'}
+                  <strong
+                    className={`mono ${describeBuyRange(record).tone === 'warn' ? 'wr-buy-blocked' : ''}`}
+                    title={record.buyBasis || undefined}
+                  >
+                    {describeBuyRange(record).text}
                   </strong>
                 </div>
                 <div>
