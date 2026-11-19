@@ -37,6 +37,7 @@ import { intradayCleanupFields } from '../src/lib/intraday-cleanup';
 import { normalizeClosedTrade, shouldShowIntradayUnfilled, isClosedWithSell } from '../src/lib/trade-consistency';
 import { floatingReturnPct } from '../src/lib/floating-return';
 import { paginate } from '../src/lib/paginate';
+import * as path from 'path';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2175,6 +2176,25 @@ function runPaginationAssertion() {
   }
 }
 
+function runPaginationComponentAssertion() {
+  section('分页组件 P1：上下两处实例共用同一套状态与组件');
+  {
+    const table = fs.readFileSync('src/components/WinRateTradeTable.tsx', 'utf8');
+    const pagination = fs.readFileSync(
+      path.join('src', 'components', 'Pagination.tsx'), 'utf8',
+    );
+    check(pagination.includes('export function Pagination'), '分页器已提取为独立组件');
+    check((table.match(/<Pagination/g) || []).length === 2, '表格内恰好两处实例（上/下各一）');
+    check((table.match(/from '.\/Pagination'/g) || []).length === 1, '只 import 一次，无重复 JSX');
+    check((table.match(/page=\{pageSlice\.page\}/g) || []).length === 2,
+          '两处传入同一个 pageSlice.page（状态同步）');
+    check((table.match(/pageSize=\{pageSize\}/g) || []).length === 2,
+          '两处传入同一个 pageSize（下拉同步）');
+    check(table.includes('variant="inline"') && table.includes('variant="bottom"'),
+          '上方 inline + 下方 bottom 两种布局');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2203,6 +2223,7 @@ async function main() {
   runTradeConsistencyAssertion();
   runFloatingReturnAssertion();
   runPaginationAssertion();
+  runPaginationComponentAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

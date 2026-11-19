@@ -1421,8 +1421,15 @@ button.idx-card:hover {
 }
 
 .wr-table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-bottom: 10px;
 }
+/* 工具栏内的上方分页器：与 Tab 同行靠右，复用下方分页器全部样式 */
+.wr-pagination.wr-pagination-inline { padding: 0; }
 .wr-th-sort {
   cursor: pointer;
   user-select: none;

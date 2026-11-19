@@ -16,6 +16,7 @@ import {
 import { shouldShowIntradayUnfilled } from '../lib/trade-consistency';
 import { floatingReturnPct } from '../lib/floating-return';
 import { paginate } from '../lib/paginate';
+import { Pagination } from './Pagination';
 import { toFullCode } from '../lib/full-code';
 import { usePolling } from '../hooks/usePolling';
 import { marketApi } from '../services/market';
@@ -204,6 +205,15 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
             </button>
           ))}
         </div>
+        <Pagination
+          variant="inline"
+          page={pageSlice.page}
+          totalPages={pageSlice.totalPages}
+          total={pageSlice.total}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
 
       {rows.length === 0 ? (
@@ -344,38 +354,15 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
         </div>
       )}
 
-      <div className="wr-pagination">
-        <button
-          type="button"
-          className="wr-page-btn"
-          disabled={pageSlice.page <= 1}
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
-        >
-          上一页
-        </button>
-        <span className="wr-page-info">
-          当前第 {pageSlice.page} / {pageSlice.totalPages} 页，共 {pageSlice.total} 条记录
-        </span>
-        <button
-          type="button"
-          className="wr-page-btn"
-          disabled={pageSlice.page >= pageSlice.totalPages}
-          onClick={() => setPage((p) => Math.min(pageSlice.totalPages, p + 1))}
-        >
-          下一页
-        </button>
-        <label className="wr-page-size">
-          每页
-          <select
-            value={pageSize}
-            onChange={(e) => setPageSize(Number(e.target.value) as 50 | 100 | 0)}
-          >
-            <option value={50}>50条</option>
-            <option value={100}>100条</option>
-            <option value={0}>全部</option>
-          </select>
-        </label>
-      </div>
+      <Pagination
+        variant="bottom"
+        page={pageSlice.page}
+        totalPages={pageSlice.totalPages}
+        total={pageSlice.total}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+      />
     </div>
   );
 }
