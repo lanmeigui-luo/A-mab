@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { WinRateRecord } from '../domain/winrate';
 import {
   SELL_REASON_LABELS,
@@ -15,6 +15,7 @@ import {
 } from '../domain/winrate';
 import { shouldShowIntradayUnfilled } from '../lib/trade-consistency';
 import { floatingReturnPct } from '../lib/floating-return';
+import { paginate } from '../lib/paginate';
 import { toFullCode } from '../lib/full-code';
 import { usePolling } from '../hooks/usePolling';
 import { marketApi } from '../services/market';
@@ -98,6 +99,12 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  // 分页：默认每页 100 条；pageSize=0 表示「全部」。Tab 或每页条数变化时回到第 1 页。
+  const [pageSize, setPageSize] = useState<50 | 100 | 0>(100);
+  const [page, setPage] = useState(1);
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, pageSize]);
 
   // 【持仓浮盈】一次性提取所有 open + 有买入价的 fullCode，用 usePolling 30s 批量拉现价。
   // 失败保留上次数据（usePolling 自带），拿不到就回退 '—'，绝不在渲染循环里单只请求。
@@ -165,6 +172,10 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
     return arr;
   }, [records, statusFilter, sortKey, sortDir]);
 
+  // rows 已按日期倒序（默认 sortKey='date' / sortDir='desc'）排列，切片保证最新记录在第 1 页。
+  const pageSlice = useMemo(() => paginate(rows, page, pageSize), [rows, page, pageSize]);
+  const pageRows = pageSlice.rows;
+
   const toggleSort = (k: SortKey) => {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else {
@@ -225,7 +236,7 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
+              {pageRows.map((r) => {
                 const ret = r.trade.returnPct;
                 const category = tradeViewCategory(r);
                 // 持仓记录：用批量行情里的实时现价算浮动收益率；无现价回退 '—'
@@ -332,6 +343,39 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
           </table>
         </div>
       )}
+
+      <div className="wr-pagination">
+        <button
+          type="button"
+          className="wr-page-btn"
+          disabled={pageSlice.page <= 1}
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+        >
+          上一页
+        </button>
+        <span className="wr-page-info">
+          当前第 {pageSlice.page} / {pageSlice.totalPages} 页，共 {pageSlice.total} 条记录
+        </span>
+        <button
+          type="button"
+          className="wr-page-btn"
+          disabled={pageSlice.page >= pageSlice.totalPages}
+          onClick={() => setPage((p) => Math.min(pageSlice.totalPages, p + 1))}
+        >
+          下一页
+        </button>
+        <label className="wr-page-size">
+          每页
+          <select
+            value={pageSize}
+            onChange={(e) => setPageSize(Number(e.target.value) as 50 | 100 | 0)}
+          >
+            <option value={50}>50条</option>
+            <option value={100}>100条</option>
+            <option value={0}>全部</option>
+          </select>
+        </label>
+      </div>
     </div>
   );
 }

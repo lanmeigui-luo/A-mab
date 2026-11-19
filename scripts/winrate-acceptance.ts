@@ -36,6 +36,7 @@ import { dedupeRecords, recordBusinessKey } from '../src/lib/record-dedupe';
 import { intradayCleanupFields } from '../src/lib/intraday-cleanup';
 import { normalizeClosedTrade, shouldShowIntradayUnfilled, isClosedWithSell } from '../src/lib/trade-consistency';
 import { floatingReturnPct } from '../src/lib/floating-return';
+import { paginate } from '../src/lib/paginate';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2146,6 +2147,34 @@ function runFloatingReturnAssertion() {
   }
 }
 
+function runPaginationAssertion() {
+  section('分页 PAGE：默认每页 100 条且最新记录在首页');
+  {
+    const all = Array.from({ length: 235 }, (_, i) => i);
+    const p1 = paginate(all, 1, 100);
+    check(p1.rows.length === 100, '第 1 页 100 条（实际 ' + p1.rows.length + '）');
+    check(p1.rows[0] === 0, '按传入顺序切片：最新记录在首页首位');
+    check(p1.totalPages === 3 && p1.total === 235, '3 页 / 共 235 条');
+    const p3 = paginate(all, 3, 100);
+    check(p3.rows.length === 35, '末页 35 条（实际 ' + p3.rows.length + '）');
+  }
+
+  section('分页 PAGE：50 / 全部 / 页码越界 clamp');
+  {
+    const all = Array.from({ length: 120 }, (_, i) => i);
+    const p50 = paginate(all, 2, 50);
+    check(p50.rows.length === 50 && p50.rows[0] === 50, '每页 50：第 2 页从 50 开始');
+    check(p50.totalPages === 3, '共 3 页');
+    const allRows = paginate(all, 2, 0);
+    check(allRows.rows.length === 120 && allRows.page === 1 && allRows.totalPages === 1,
+          '「全部」不切片且页码归一为 1');
+    const over = paginate(all, 99, 50);
+    check(over.page === 3, '请求第 99 页 → clamp 到第 3 页（实际 ' + over.page + '）');
+    const none = paginate([], 1, 100);
+    check(none.totalPages === 1 && none.rows.length === 0, '空列表仍为 1 页 0 条');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2173,6 +2202,7 @@ async function main() {
   runPlaceholderLifecycleAssertion();
   runTradeConsistencyAssertion();
   runFloatingReturnAssertion();
+  runPaginationAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

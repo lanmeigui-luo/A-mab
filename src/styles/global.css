@@ -1342,6 +1342,33 @@ button.idx-card:hover {
 .ret-neg { color: #16a34a; }
 /* 持仓浮动收益率：轻微半透明 + 悬停提示，与已平仓的最终收益率区分 */
 .wr-floating { opacity: 0.85; font-style: italic; }
+/* 交易明细分页器 */
+.wr-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 10px 2px 2px;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+}
+.wr-page-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  background: var(--panel-2, #1e1e1e);
+  color: inherit;
+  cursor: pointer;
+}
+.wr-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.wr-page-size select {
+  margin-left: 6px;
+  padding: 3px 6px;
+  background: var(--panel-2, #1e1e1e);
+  color: inherit;
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+}
 .cb-mode .ret-pos { color: #1d4ed8; }
 .cb-mode .ret-neg { color: #b45309; }
 
