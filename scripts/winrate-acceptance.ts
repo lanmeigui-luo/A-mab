@@ -2504,40 +2504,39 @@ function runBoardHeatAssertion() {
   }
 
 
-  section('热力图 H5：权重口径随排序键切换 + 极值保护 + 面积守恒');
+  section('热力图 H5：涨跌幅权重按方向映射 + 地板保护 + 面积守恒');
   {
     const boards = [
+      { key: 'surge', amount: 100_000_000, changePct: 5.0 },
       { key: 'flat', amount: 8_000_000_000, changePct: 0 },
-      { key: 'crash', amount: 100_000_000, changePct: -4.5 },
-      { key: 'surge', amount: 200_000_000, changePct: 3.2 },
-      { key: 'mild', amount: 500_000_000, changePct: -0.4 },
+      { key: 'crash', amount: 200_000_000, changePct: -6.0 },
+      { key: 'mild', amount: 500_000_000, changePct: -0.5 },
     ];
     const W = 1200, H = 540;
-    const byAmount = calculateTreemap(boards, W, H, 'amount');
-    const byPct = calculateTreemap(boards, W, H, 'absPct');
-    const areaOf = (cells: typeof byAmount, key: string) => {
+    const desc = calculateTreemap(boards, W, H, 'pct_desc');
+    const asc = calculateTreemap(boards, W, H, 'pct_asc');
+    const area = (cells: typeof desc, key: string) => {
       const c = cells.find((x) => x.key === key)!;
       return c.rect.width * c.rect.height;
     };
-    check(areaOf(byAmount, 'flat') > areaOf(byAmount, 'crash'),
-          '成交额模式：8亿平盘块 > 1亿暴跌块');
-    check(areaOf(byPct, 'crash') > areaOf(byPct, 'flat'),
-          '涨跌幅模式：跌-4.5%块 > 平盘块（面积口径已切换）');
-    check(areaOf(byPct, 'crash') > areaOf(byPct, 'mild'),
-          '涨跌幅模式：极端波动块大于温和波动块');
-    check(areaOf(byPct, 'flat') > 100,
-          '平盘 0.00% 仍有可点击最小面积（实际 ' + areaOf(byPct, 'flat').toFixed(0) + 'px²）');
-    const sumA = byAmount.reduce((t, c) => t + c.rect.width * c.rect.height, 0);
-    const sumP = byPct.reduce((t, c) => t + c.rect.width * c.rect.height, 0);
-    check(Math.abs(sumA - W * H) / (W * H) < 0.0001 &&
-          Math.abs(sumP - W * H) / (W * H) < 0.0001,
-          '两种权重模式面积均 100% 守恒');
-    check(byAmount.map((c) => c.key).join() === byPct.map((c) => c.key).join(),
-          '切换权重不改排列顺序（顺序仍由用户排序决定）');
+    check(area(desc, 'surge') > area(desc, 'flat') && area(desc, 'surge') > area(desc, 'crash'),
+          '降序权重：涨幅+5% 面积第一');
+    check(area(desc, 'crash') < area(desc, 'mild'),
+          '降序权重：跌幅-6% 比 -0.5% 更小');
+    check(area(asc, 'crash') > area(asc, 'flat') && area(asc, 'crash') > area(asc, 'surge'),
+          '升序权重：跌幅-6% 面积第一');
+    check(area(asc, 'surge') < area(asc, 'mild'),
+          '升序权重：涨幅+5% 比 -0.5% 更小');
+    check(area(desc, 'crash') > 100 && area(asc, 'surge') > 100,
+          '两端极值都有 1% 地板保住的可点击面积');
+    const sum = (cells: typeof desc) => cells.reduce((t, c) => t + c.rect.width * c.rect.height, 0);
+    check(Math.abs(sum(desc) - W * H) / (W * H) < 0.0001 &&
+          Math.abs(sum(asc) - W * H) / (W * H) < 0.0001,
+          '两种方向面积均 100% 守恒');
     const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
-    check(page.includes("sort === 'changePct' ? 'absPct' : 'amount'"),
-          '涨幅排序→absPct，成交额/领涨股→amount');
-    check(page.includes('[rows, heatSize, sort]'), 'sort 变化触发重算');
+    check(page.includes("sort === 'changePct' ? (desc ? 'pct_desc' : 'pct_asc') : 'amount'"),
+          'desc 标志正确传入权重模式');
+    check(page.includes('[rows, heatSize, sort, desc]'), 'desc 变化触发重算');
   }
 
   section('热力图 H4：输入顺序=用户排序口径，面积仍由成交额决定');

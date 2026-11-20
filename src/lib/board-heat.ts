@@ -31,12 +31,12 @@ export interface TreemapItem {
   key: string;
   /** 成交额（元）；amount 模式下作为权重 */
   amount: number | null | undefined;
-  /** 涨跌幅（%）；absPct 模式下取绝对值作为权重 */
+  /** 涨跌幅（%）；pct_desc / pct_asc 模式下参与权重映射 */
   changePct?: number | null;
 }
 
 /** 权重口径：成交额体量 / 涨跌幅极端程度 */
-export type TreemapWeightMode = 'amount' | 'absPct';
+export type TreemapWeightMode = 'amount' | 'pct_desc' | 'pct_asc';
 
 export interface TreemapRect {
   left: number;
@@ -91,15 +91,19 @@ export function calculateTreemap(
   const H = Number.isFinite(containerHeight) ? Math.max(0, containerHeight) : 0;
   if (!boards.length || W <= 0 || H <= 0) return [];
 
-  // 【动态权重】面积口径跟随用户选中的排序键：
-  //  - amount  → weight = 成交额（资金体量）
-  //  - absPct  → weight = |涨跌幅|（极端波动的板块最大，视觉冲击最强）
+  // 【动态权重】面积口径跟随排序键 + 排序方向：
+  //  - amount   → weight = 成交额（资金体量）
+  //  - pct_desc → weight = pct - min(pct) + 1（涨得最多面积最大，跌得最多保底 1）
+  //  - pct_asc  → weight = max(pct) - pct + 1（跌得最惨面积最大，涨得最多保底 1）
   //  - 领涨股排序由调用方 fallback 到 amount
-  const raw = boards.map((b) => {
-    if (weightMode === 'absPct') {
-      const pct = b.changePct;
-      return typeof pct === 'number' && Number.isFinite(pct) ? Math.abs(pct) : 0;
-    }
+  const pctValues = boards.map((b) =>
+    typeof b.changePct === 'number' && Number.isFinite(b.changePct) ? b.changePct : 0,
+  );
+  const minPct = pctValues.length ? Math.min(...pctValues) : 0;
+  const maxPct = pctValues.length ? Math.max(...pctValues) : 0;
+  const raw = boards.map((b, i) => {
+    if (weightMode === 'pct_desc') return pctValues[i] - minPct + 1;
+    if (weightMode === 'pct_asc') return maxPct - pctValues[i] + 1;
     return typeof b.amount === 'number' && Number.isFinite(b.amount) && b.amount > 0 ? b.amount : 0;
   });
   // 【最小可读面积】最大值 1% 作为权重地板：平盘(0.00%)或无成交额板块
