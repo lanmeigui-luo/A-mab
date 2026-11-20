@@ -741,6 +741,24 @@ button.idx-card:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.heat-tile-tiny { padding: 3px 4px; gap: 0; }
+.heat-tile-tiny .heat-name { font-size: 10px; }
+.heat-tile-tiny .heat-pct { font-size: 12px; }
+.heat-legend {
+  position: absolute;
+  right: 8px;
+  bottom: 4px;
+  z-index: 2;
+  font-size: 10px;
+  color: #4B5563;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+@media (prefers-color-scheme: dark) {
+  .heat-legend { color: #E5E7EB; background: rgba(31, 41, 55, 0.8); }
+}
 @media (max-width: 900px) { .board-heatmap { height: 420px; } }
 
 .board-cards {

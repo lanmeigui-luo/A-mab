@@ -18,6 +18,8 @@ export function heatColor(pct: number | null | undefined): HeatColor {
   if (pct == null || !Number.isFinite(pct)) {
     return { background: '#F3F4F6', foreground: '#4B5563', level: 'flat' };
   }
+  // 【平盘档】0.00% 必须中性灰，禁止落入 -1~0 的浅绿档
+  if (pct === 0) return { background: '#9CA3AF', foreground: '#1F2937', level: 'flat' };
   if (pct > 3) return { background: '#991B1B', foreground: '#FFFFFF', level: 'strong-up' };
   if (pct >= 1) return { background: '#DC2626', foreground: '#FFFFFF', level: 'up' };
   if (pct > 0) return { background: '#FCA5A5', foreground: '#7F1D1D', level: 'light-up' };
@@ -96,6 +98,8 @@ export function calculateTreemap(
   //  - pct_desc → weight = pct - min(pct) + 1（涨得最多面积最大，跌得最多保底 1）
   //  - pct_asc  → weight = max(pct) - pct + 1（跌得最惨面积最大，涨得最多保底 1）
   //  - 领涨股排序由调用方 fallback 到 amount
+  // 【空值兜底】null / NaN / undefined 一律回退 0（有限正数口径），
+  // 由后面的 +1 与地板保证任何板块都不会得到 NaN 或 0 面积。
   const pctValues = boards.map((b) =>
     typeof b.changePct === 'number' && Number.isFinite(b.changePct) ? b.changePct : 0,
   );
@@ -166,4 +170,46 @@ export function calculateTreemap(
   }
 
   return boards.map((b) => ({ ...b, rect: out.get(b.key) ?? { left: 0, top: 0, width: 0, height: 0 } }));
+}
+
+/** 板块排序键（与 BoardPage 的 SortKey 同口径） */
+export type BoardSortKey = 'changePct' | 'amount' | 'leadChangePct';
+
+export interface MetricText {
+  text: string;
+  kind: 'pct' | 'amount' | 'lead' | 'none';
+}
+
+export interface MetricSource {
+  changePct?: number | null;
+  amount?: number | null;
+  leadName?: string | null;
+  leadChangePct?: number | null;
+}
+
+const fmtPctText = (v: number | null | undefined): string =>
+  typeof v === 'number' && Number.isFinite(v) ? (v > 0 ? '+' : '') + v.toFixed(2) + '%' : '—';
+
+/** 成交额紧凑展示：元 → 亿 / 万 */
+const fmtAmountText = (v: number | null | undefined): string => {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return '—';
+  if (v >= 1e8) return '¥' + (v / 1e8).toFixed(2) + '亿';
+  return '¥' + (v / 1e4).toFixed(0) + '万';
+};
+
+/** 主指标：跟随排序口径。领涨股排序保持现状（主=涨跌幅）。 */
+export function primaryMetric(b: MetricSource, sort: BoardSortKey): MetricText {
+  if (sort === 'amount') return { text: fmtAmountText(b.amount), kind: 'amount' };
+  return { text: fmtPctText(b.changePct), kind: 'pct' };
+}
+
+/** 次指标：成交额排序→涨跌幅；涨跌幅/领涨股排序→领涨股（无则 —）。 */
+export function secondaryMetric(b: MetricSource, sort: BoardSortKey): MetricText {
+  if (sort === 'amount') return { text: fmtPctText(b.changePct), kind: 'pct' };
+  const name = typeof b.leadName === 'string' ? b.leadName.trim() : '';
+  if (!name) return { text: '领涨股 —', kind: 'none' };
+  return {
+    text: name + ' ' + fmtPctText(b.leadChangePct),
+    kind: 'lead',
+  };
 }

@@ -45,7 +45,12 @@ import { resolvePrevClose, calcPrevChange, isUsablePrevClose, firstValidPrice } 
 import { isPlanTradable, isSameDayClose } from '../src/lib/trade-plan-validity';
 import { describeBuyRange } from '../src/lib/buy-range-label';
 import { isPlanIncomplete, isMissingPlanAnomaly } from '../src/lib/plan-missing';
-import { heatColor, calculateTreemap } from '../src/lib/board-heat';
+import {
+  heatColor,
+  calculateTreemap,
+  primaryMetric,
+  secondaryMetric,
+} from '../src/lib/board-heat';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2437,7 +2442,14 @@ function runBoardHeatAssertion() {
     check(heatColor(3).level === 'up', '=3% 中红');
     check(heatColor(1).level === 'up', '=1% 中红');
     check(heatColor(0.5).level === 'light-up', '0~1% 浅红');
-    check(heatColor(0).level === 'light-down', '=0% 浅绿');
+    check(heatColor(0).level === 'flat' && heatColor(0).background === '#9CA3AF',
+          '=0.00% 中性灰（禁止落浅绿档）');
+    check(heatColor(0.01).level === 'light-up', '+0.01% 浅红');
+    check(heatColor(-0.01).level === 'light-down', '-0.01% 浅绿');
+    check(heatColor(1).level === 'up' && heatColor(1.01).level === 'up', '±1.00 边界');
+    check(heatColor(-1).level === 'light-down' && heatColor(-1.01).level === 'down', '-1.00 边界');
+    check(heatColor(3).level === 'up' && heatColor(3.01).level === 'strong-up', '+3.00 边界');
+    check(heatColor(-3).level === 'down' && heatColor(-3.01).level === 'strong-down', '-3.00 边界');
     check(heatColor(-1).level === 'light-down', '=-1% 浅绿（左闭右开）');
     check(heatColor(-3).level === 'down', '=-3% 中绿');
     check(heatColor(-3.01).level === 'strong-down', '<-3% 深绿');
@@ -2599,6 +2611,7 @@ async function main() {
   runBuyRangeLabelAssertion();
   runPlanHardGateAssertion();
   runBoardHeatAssertion();
+  runFinalCloseoutAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);
@@ -2614,3 +2627,53 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
+function runFinalCloseoutAssertion() {
+  section('收口 F1：主次指标随排序口径切换');
+  {
+    const b = { changePct: 1.04, amount: 3_483_000_000, leadName: '某某股', leadChangePct: 5.2 };
+    check(primaryMetric(b, 'changePct').text === '+1.04%', '涨跌幅排序 → 主=涨跌幅');
+    check(secondaryMetric(b, 'changePct').kind === 'lead', '涨跌幅排序 → 次=领涨股');
+    check(primaryMetric(b, 'amount').text === '¥34.83亿', '成交额排序 → 主=成交额');
+    check(secondaryMetric(b, 'amount').kind === 'pct', '成交额排序 → 次=涨跌幅');
+    check(primaryMetric(b, 'leadChangePct').kind === 'pct', '领涨股排序 → 主仍为涨跌幅（保持现状）');
+    check(secondaryMetric({ ...b, leadName: null }, 'changePct').text === '领涨股 —', '无领涨股 → —');
+  }
+
+  section('收口 F2：空值兜底，不产生 NaN / 0 面积');
+  {
+    const boards = [
+      { key: 'nan', amount: null, changePct: Number.NaN },
+      { key: 'nil', amount: 0, changePct: null },
+      { key: 'ok', amount: 1_000_000_000, changePct: 2 },
+    ];
+    for (const mode of ['amount', 'pct_desc', 'pct_asc'] as const) {
+      const cells = calculateTreemap(boards, 1200, 540, mode);
+      check(cells.every((c) => Number.isFinite(c.rect.width) && c.rect.width > 0 &&
+        Number.isFinite(c.rect.height) && c.rect.height > 0),
+        mode + '：空值板块也有有限正面积');
+    }
+  }
+
+  section('收口 F3：全序断言（面积随排序单调不增）+ 健壮性');
+  {
+    const boards = Array.from({ length: 12 }, (_, i) => ({
+      key: 'k' + i,
+      amount: (12 - i) * 500_000_000,
+      changePct: 4 - i * 0.6,
+    }));
+    const sorted = [...boards].sort((a, b) => b.changePct - a.changePct);
+    const cells = calculateTreemap(sorted, 1200, 540, 'pct_desc');
+    const areas = cells.map((c) => c.rect.width * c.rect.height);
+    let monotone = true;
+    for (let i = 1; i < areas.length; i++) {
+      if (areas[i] > areas[i - 1] * 1.005) monotone = false;
+    }
+    check(monotone, '面积序列单调不增（容差 0.5%）');
+    check(areas.every((a) => Number.isFinite(a) && a > 0), '健壮性：无 NaN / 无 0 面积');
+    const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
+    check(page.includes('面积 = 当前排序字段 · 颜色 = 涨跌幅'), '右下角图例已加');
+    check(page.includes('cell.rect.width < 60 || cell.rect.height < 46'), '小块降级为名+主指标');
+  }
+}
+

@@ -3,7 +3,12 @@ import type { BoardConsResponse, BoardRow, BoardStock, BoardType } from '@/domai
 import { BOARD_TYPES } from '@/domain/board';
 import { marketApi } from '@/services/market';
 import { changeColor, formatPct } from '@/lib/market-colors';
-import { heatColor, calculateTreemap } from '@/lib/board-heat';
+import {
+  heatColor,
+  calculateTreemap,
+  primaryMetric,
+  secondaryMetric,
+} from '@/lib/board-heat';
 import { DASH, fmtNum } from '@/lib/format';
 import { DeepAnalysis } from '@/components/DeepAnalysis';
 
@@ -334,11 +339,22 @@ export function BoardPage({
             const b = rowByLabel.get(cell.key);
             if (!b) return null;
             const heat = heatColor(b.changePct);
-            const hasLead = !!(b.leadName && b.leadName.trim());
+            const primary = primaryMetric(b, sort);
+            const secondary = secondaryMetric(b, sort);
+            // 过小的块只留板块名 + 主指标，其余信息全部进 hover title
+            const tiny = cell.rect.width < 60 || cell.rect.height < 46;
+            const title = [
+              b.name,
+              `成交额 ${yuan(b.amount)}`,
+              `涨跌幅 ${b.changePct != null ? formatPct(b.changePct) + '%' : DASH}`,
+              b.leadName && b.leadName.trim()
+                ? `领涨股 ${b.leadName} ${b.leadChangePct != null ? formatPct(b.leadChangePct) + '%' : ''}`
+                : '领涨股数据源暂未提供',
+            ].join(' · ');
             return (
               <button
                 key={cell.key}
-                className="heat-tile"
+                className={`heat-tile${tiny ? ' heat-tile-tiny' : ''}`}
                 style={{
                   left: cell.rect.left,
                   top: cell.rect.top,
@@ -348,20 +364,15 @@ export function BoardPage({
                   color: heat.foreground,
                 }}
                 onClick={() => setDetail(b)}
-                title={`${b.name} · 成交额 ${yuan(b.amount)}${hasLead ? '' : ' · 领涨股数据源暂未提供'}`}
+                title={title}
               >
                 <span className="heat-name">{b.name}</span>
-                <span className="heat-pct">
-                  {b.changePct != null ? formatPct(b.changePct) + '%' : DASH}
-                </span>
-                <span className="heat-lead" title={hasLead ? undefined : '数据源暂未提供'}>
-                  {hasLead
-                    ? `${b.leadName} ${b.leadChangePct != null ? formatPct(b.leadChangePct) + '%' : ''}`
-                    : '领涨股 —'}
-                </span>
+                <span className="heat-pct">{primary.text}</span>
+                {!tiny && <span className="heat-lead">{secondary.text}</span>}
               </button>
             );
           })}
+          <div className="heat-legend">面积 = 当前排序字段 · 颜色 = 涨跌幅</div>
         </div>
       )}
 
