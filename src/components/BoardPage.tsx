@@ -6,6 +6,7 @@ import { changeColor, formatPct } from '@/lib/market-colors';
 import {
   heatColor,
   calculateTreemap,
+  isBoardDataMissing,
   primaryMetric,
   secondaryMetric,
 } from '@/lib/board-heat';
@@ -252,16 +253,20 @@ export function BoardPage({
   }, [list, keyword, sort, desc]);
 
   const rowByLabel = useMemo(() => new Map(rows.map((b) => [b.label, b])), [rows]);
+  // 【P1】无数据板块不进 treemap（列表模式仍保留并标注）
+  const heatRows = useMemo(() => rows.filter((b) => !isBoardDataMissing(b)), [rows]);
   const cells = useMemo(
     () =>
       calculateTreemap(
-        // 面积口径跟随排序键与方向：涨幅降序→涨得多块大；涨幅升序→跌得狠块大
-        rows.map((b) => ({ key: b.label, amount: b.amount, changePct: b.changePct })),
+        // 面积口径跟随排序键与方向；amount 升序用 max-amount+1（非 -amount）
+        heatRows.map((b) => ({ key: b.label, amount: b.amount, changePct: b.changePct })),
         heatSize.w,
         heatSize.h,
-        sort === 'changePct' ? (desc ? 'pct_desc' : 'pct_asc') : 'amount',
+        sort === 'changePct'
+          ? desc ? 'pct_desc' : 'pct_asc'
+          : desc ? 'amount' : 'amount_asc',
       ),
-    [rows, heatSize, sort, desc],
+    [heatRows, heatSize, sort, desc],
   );
 
   return (
@@ -394,11 +399,16 @@ export function BoardPage({
             <tbody>
               {rows.map((b) => (
                 <tr key={b.label}>
-                  <td>{b.name}</td>
-                  <td className="num mono" style={{ color: changeColor(b.changePct) }}>
-                    {b.changePct != null ? formatPct(b.changePct) + '%' : DASH}
+                  <td>
+                    {b.name}
+                    {isBoardDataMissing(b) && <span className="board-no-data">无数据</span>}
                   </td>
-                  <td className="num mono">{yuan(b.amount)}</td>
+                  <td className="num mono" style={{ color: changeColor(b.changePct) }}>
+                    {isBoardDataMissing(b) ? DASH : (b.changePct != null ? formatPct(b.changePct) + '%' : DASH)}
+                  </td>
+                  <td className="num mono">
+                    {isBoardDataMissing(b) ? DASH : yuan(b.amount)}
+                  </td>
                   <td className="num mono">{fmtNum(b.avgPrice)}</td>
                   <td className="num mono">{b.count ?? DASH}</td>
                   <td>{b.leadName ?? DASH}</td>

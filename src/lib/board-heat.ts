@@ -38,7 +38,16 @@ export interface TreemapItem {
 }
 
 /** 权重口径：成交额体量 / 涨跌幅极端程度 */
-export type TreemapWeightMode = 'amount' | 'pct_desc' | 'pct_asc';
+export type TreemapWeightMode = 'amount' | 'amount_asc' | 'pct_desc' | 'pct_asc';
+
+/**
+ * 【P1 无数据判据】上游 AkShare 对无行情板块会返回 amount/volume/avgPrice 全 0
+ * 且 leadName='--' 的占位记录（实测「社会工作」hangye_ZQ84）。这类记录不得进入 treemap，
+ * 否则会被 +1 / 地板放大成巨大的误导性色块。
+ */
+export function isBoardDataMissing(b: { amount?: number | null }): boolean {
+  return !(typeof b.amount === 'number' && Number.isFinite(b.amount) && b.amount > 0);
+}
 
 export interface TreemapRect {
   left: number;
@@ -94,25 +103,39 @@ export function calculateTreemap(
   if (!boards.length || W <= 0 || H <= 0) return [];
 
   // 【动态权重】面积口径跟随排序键 + 排序方向：
-  //  - amount   → weight = 成交额（资金体量）
+  //  - amount   → weight = 成交额（降序：资金体量大的块大）
+  //  - amount_asc→ weight = maxAmount - amount + 1（升序：资金体量小的块大，与 pct_asc 同构）
   //  - pct_desc → weight = pct - min(pct) + 1（涨得最多面积最大，跌得最多保底 1）
   //  - pct_asc  → weight = max(pct) - pct + 1（跌得最惨面积最大，涨得最多保底 1）
   //  - 领涨股排序由调用方 fallback 到 amount
   // 【空值兜底】null / NaN / undefined 一律回退 0（有限正数口径），
   // 由后面的 +1 与地板保证任何板块都不会得到 NaN 或 0 面积。
+  const amountValues = boards.map((b) =>
+    typeof b.amount === 'number' && Number.isFinite(b.amount) && b.amount > 0 ? b.amount : 0,
+  );
+  const maxAmount = amountValues.length ? Math.max(...amountValues) : 0;
   const pctValues = boards.map((b) =>
     typeof b.changePct === 'number' && Number.isFinite(b.changePct) ? b.changePct : 0,
   );
   const minPct = pctValues.length ? Math.min(...pctValues) : 0;
   const maxPct = pctValues.length ? Math.max(...pctValues) : 0;
-  const raw = boards.map((b, i) => {
+  const raw = boards.map((_b, i) => {
     if (weightMode === 'pct_desc') return pctValues[i] - minPct + 1;
     if (weightMode === 'pct_asc') return maxPct - pctValues[i] + 1;
-    return typeof b.amount === 'number' && Number.isFinite(b.amount) && b.amount > 0 ? b.amount : 0;
+    if (weightMode === 'amount_asc') return maxAmount - amountValues[i] + 1;
+    return amountValues[i];
   });
-  // 【最小可读面积】最大值 1% 作为权重地板：平盘(0.00%)或无成交额板块
-  // 也能保住一块可点击的最小正方形，不会消失成 0px²。
-  const floor = Math.max(...raw, 1) * 0.01;
+  // 【P1 像素地板】旧 1% 地板在真实数据下只给 367px²(19×19)，不可读。
+  // 新口径：目标最小块 3200px²（≈57×57），实测保证短边 ≥36px；反推权重地板。
+  // 推导：f/(Σraw+n·f)·A ≥ 1600 ⇒ f ≥ 1600·Σraw/(A-1600·n)。
+  // 这会刻意牺牲小板块之间的相对比例，换取每块都可点击可读。
+  const containerArea = W * H;
+  const rawSum = raw.reduce((t, v) => t + v, 0);
+  const targetArea = 3200;
+  const pixelFloor = rawSum > 0 && containerArea > targetArea * boards.length
+    ? (targetArea * rawSum) / (containerArea - targetArea * boards.length)
+    : 0;
+  const floor = Math.max(Math.max(...raw, 1) * 0.01, pixelFloor);
   const items: WorkItem[] = boards.map((b, i) => ({
     key: b.key,
     weight: Math.max(raw[i], floor),

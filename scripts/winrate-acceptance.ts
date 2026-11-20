@@ -48,6 +48,7 @@ import { isPlanIncomplete, isMissingPlanAnomaly } from '../src/lib/plan-missing'
 import {
   heatColor,
   calculateTreemap,
+  isBoardDataMissing,
   primaryMetric,
   secondaryMetric,
 } from '../src/lib/board-heat';
@@ -2546,9 +2547,8 @@ function runBoardHeatAssertion() {
           Math.abs(sum(asc) - W * H) / (W * H) < 0.0001,
           '两种方向面积均 100% 守恒');
     const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
-    check(page.includes("sort === 'changePct' ? (desc ? 'pct_desc' : 'pct_asc') : 'amount'"),
-          'desc 标志正确传入权重模式');
-    check(page.includes('[rows, heatSize, sort, desc]'), 'desc 变化触发重算');
+    check(page.includes(": desc ? 'amount' : 'amount_asc'"), 'desc 标志正确传入权重模式');
+    check(page.includes('[heatRows, heatSize, sort, desc]'), 'desc 变化触发重算');
   }
 
   section('热力图 H4：输入顺序=用户排序口径，面积仍由成交额决定');
@@ -2570,7 +2570,50 @@ function runBoardHeatAssertion() {
     const heat = fs.readFileSync('src/lib/board-heat.ts', 'utf8');
     check(!heat.includes('items.sort('), '算法内部没有覆盖外部顺序的硬编码排序');
     const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
-    check(page.includes('[rows, heatSize'), '排序变化经 rows → cells 依赖链触发重算');
+    check(page.includes('[heatRows, heatSize'), '排序变化经 rows → cells 依赖链触发重算');
+  }
+}
+
+
+function runCloseout2Assertion() {
+  section('收口2 G1：成交额升序权重随方向反转（max-amount+1）');
+  {
+    const boards = [
+      { key: 'big', amount: 9_000_000_000, changePct: 1 },
+      { key: 'mid', amount: 3_000_000_000, changePct: 0 },
+      { key: 'small', amount: 100_000_000, changePct: -1 },
+    ];
+    const W = 1200, H = 540;
+    const d = calculateTreemap(boards, W, H, 'amount');
+    const a = calculateTreemap([...boards].reverse(), W, H, 'amount_asc');
+    const area = (cells: typeof d, k: string) => {
+      const c = cells.find((x) => x.key === k)!;
+      return c.rect.width * c.rect.height;
+    };
+    check(area(d, 'big') > area(d, 'small'), '降序：大成交额块 > 小成交额块');
+    check(area(a, 'small') > area(a, 'big'), '升序：小成交额块 > 大成交额块');
+    const monotone = (cells: typeof d) => {
+      const xs = cells.map((c) => c.rect.width * c.rect.height);
+      for (let i = 1; i < xs.length; i++) if (xs[i] > xs[i - 1] * 1.005) return false;
+      return true;
+    };
+    check(monotone(d) && monotone(a), '成交额两个方向面积均单调不增');
+  }
+
+  section('收口2 G2：无数据板块排除 + 像素地板');
+  {
+    check(isBoardDataMissing({ amount: 0 }), 'amount=0 判为无数据');
+    check(isBoardDataMissing({ amount: null }), 'amount=null 判为无数据');
+    check(!isBoardDataMissing({ amount: 1 }), '正成交额判为有效');
+    const boards = Array.from({ length: 80 }, (_, i) => ({
+      key: 'k' + i,
+      amount: i === 0 ? 30_000_000_000 : (81 - i) * 5_000_000,
+      changePct: 1 - i * 0.05,
+    }));
+    const cells = calculateTreemap(boards, 1200, 540, 'amount');
+    const minShort = Math.min(...cells.map((c) => Math.min(c.rect.width, c.rect.height)));
+    check(minShort >= 36, '最小块短边 ≥36px（实际 ' + minShort.toFixed(1) + 'px）');
+    check(cells.every((c) => c.rect.width > 0 && c.rect.height > 0), '无 0 面积');
   }
 }
 
@@ -2612,6 +2655,7 @@ async function main() {
   runPlanHardGateAssertion();
   runBoardHeatAssertion();
   runFinalCloseoutAssertion();
+  runCloseout2Assertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

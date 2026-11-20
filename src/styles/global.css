@@ -741,6 +741,14 @@ button.idx-card:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.board-no-data {
+  margin-left: 6px;
+  padding: 0 4px;
+  font-size: 10px;
+  color: #9CA3AF;
+  border: 1px solid #D1D5DB;
+  border-radius: 3px;
+}
 .heat-tile-tiny { padding: 3px 4px; gap: 0; }
 .heat-tile-tiny .heat-name { font-size: 10px; }
 .heat-tile-tiny .heat-pct { font-size: 12px; }
