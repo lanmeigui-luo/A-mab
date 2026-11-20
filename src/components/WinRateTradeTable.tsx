@@ -387,6 +387,9 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                       {r.trade.anomalies.includes('t_plus_1_violation') && (
                         <span className="chip warn">T+1 违规</span>
                       )}
+                      {r.trade.anomalies.includes('missing_plan_anomaly') && (
+                        <span className="chip warn">计划残缺</span>
+                      )}
                       {r.trade.sellReason === 'ambiguous_intraday' && (
                         <span className="chip muted">歧义</span>
                       )}

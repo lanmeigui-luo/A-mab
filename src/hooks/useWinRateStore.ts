@@ -3,6 +3,7 @@ import type { WinRateRecord, TradeRecord, MinuteResolveMeta } from '../domain/wi
 import { dedupeRecords, recordBusinessKey } from '../lib/record-dedupe';
 import { normalizeClosedTrade } from '../lib/trade-consistency';
 import { isSameDayClose } from '../lib/trade-plan-validity';
+import { isMissingPlanAnomaly } from '../lib/plan-missing';
 
 const STORAGE_KEY = 'radar.winrate.v1';
 const SCHEMA_VERSION = 1;
@@ -83,6 +84,16 @@ function migrateWinRateRecord(r: WinRateRecord): WinRateRecord {
         excludedFromStats: true,
         invalidReason: '违规同日买卖（T+1 击穿），已排除统计',
         anomalies: [...new Set([...(next.trade.anomalies || []), 't_plus_1_violation' as never])],
+      };
+    }
+    // 【存量脏数据】已买入但计划残缺（如 600408 龙回头）：强制标异常、排除分母。
+    if (isMissingPlanAnomaly({ buyLow: next.buyLow, stop: next.stop, buyPrice: next.trade.buyPrice })) {
+      next.trade = {
+        ...next.trade,
+        status: 'anomaly',
+        excludedFromStats: true,
+        invalidReason: '买卖计划残缺（买入区间或止损缺失），禁止买入',
+        anomalies: [...new Set([...(next.trade.anomalies || []), 'missing_plan_anomaly' as never])],
       };
     }
     next.trade = normalizeClosedTrade(next.trade);

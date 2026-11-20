@@ -124,6 +124,8 @@ export function sliceDayBars(bars: MinuteBar[], candidateDay: string): MinuteBar
 export interface EntryPlan {
   buyLow: number | null;
   buyHigh: number | null;
+  /** 止损价（元）；盘中买入死规矩要求必须有效，缺失直接 invalid */
+  stop?: number | null;
   /** 当日涨停价（instant 一字板判定用）；缺失按「不拦截」，由日K兜底处理 */
   limitUpPrice?: number | null;
 }
@@ -133,6 +135,8 @@ export type EntryDecision =
   | { kind: 'bought'; buyPrice: number; barDate: string }
   /** instant 9:30 一次性判定为未成交（高开超限 / 一字板 / 低开） */
   | { kind: 'unfilled' }
+  /** 买卖计划残缺（buyLow 或 stop 缺失）→ 绝对禁止买入，直接终态 invalid */
+  | { kind: 'invalid' }
   /** 尚未触发 / 不适用 / 无计划：保持「待买入」，继续监控或交日K兜底 */
   | { kind: 'skip' };
 
@@ -176,7 +180,12 @@ export function evaluateIntradayEntry(
 ): EntryDecision {
   const style = entryStyle ?? 'daily_only';
   if (style === 'daily_only' || bars.length === 0) return { kind: 'skip' };
-  if (plan.buyLow == null && plan.buyHigh == null) return { kind: 'skip' };
+  // 【绝对死规矩】买入下限或止损缺失 ⇒ 半截计划，一律 invalid，绝不买入。
+  // 不区分战法：龙回头的路径错位、低吸的 MA10 缺失、超跌反弹的 low30 缺失全部在此封死。
+  if (plan.buyLow == null || plan.stop == null || !Number.isFinite(plan.stop) || plan.stop <= 0) {
+    return { kind: 'invalid' };
+  }
+  if (plan.buyHigh == null) return { kind: 'skip' };
 
   if (style === 'instant') {
     const first = bars[0];

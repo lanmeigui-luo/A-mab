@@ -130,15 +130,19 @@ export function buildTradePlan({ ind, snap, strategyIds = [] } = {}) {
         break;
       }
       case 'dragon-return': {
+        // 【2026-11-20 治本】涨停基准嵌在 ind.dragon 里（computeIndicators:165），
+        // 顶层 ind.prevLimitBase 从不存在；eval 路径早已兼容，这里同步，避免半截计划。
+        const prevLimitBase = ind.dragon?.prevLimitBase ?? ind.prevLimitBase ?? null;
+        const prevLimitPrice = ind.dragon?.prevLimitPrice ?? ind.prevLimitPrice ?? null;
         // 防守线 = 涨停前一日收盘价 ×(1+3%)
-        const defense = ind.prevLimitBase != null ? ind.prevLimitBase * 1.03 : null;
+        const defense = prevLimitBase != null ? prevLimitBase * 1.03 : null;
         buyLow = defense != null ? defense : null;
         buyHigh = price * 1.02;
         buyBasis = defense != null ? `防守线 ${r2(defense)} 至 现价 +2%` : '涨停基准价缺失，按现价 +2% 上限';
         stop = defense != null ? defense * 0.98 : null;
         stopBasis = defense != null ? `跌破防守线 ${r2(defense)}` : '涨停基准价缺失，无法定止损';
-        target1 = ind.prevLimitPrice != null ? ind.prevLimitPrice : null;
-        target1Basis = ind.prevLimitPrice != null ? `前涨停价 ${r2(ind.prevLimitPrice)}` : '前涨停价缺失';
+        target1 = prevLimitPrice != null ? prevLimitPrice : null;
+        target1Basis = prevLimitPrice != null ? `前涨停价 ${r2(prevLimitPrice)}` : '前涨停价缺失';
         target2 = prevHigh != null ? prevHigh : null;
         target2Basis = prevHigh != null ? `前高 ${r2(prevHigh)}` : '前高缺失';
         addPrice = null;

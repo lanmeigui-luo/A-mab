@@ -112,7 +112,8 @@ export type WinRateAnomaly =
   | 'no_signal' // 当日全市场无符合该战法条件的标的（占位记录）
   | 'snapshot_missing' // 该交易日无收盘快照（自动任务未运行）
   | 'intraday_unfilled'
-  | 't_plus_1_violation'; // 同日买卖，违反 T+1（已排除分母） // 14:55 选中但 14:57 复核未成交（价格超出买入区间/停牌）
+  | 't_plus_1_violation' // 同日买卖，违反 T+1（已排除分母）
+  | 'missing_plan_anomaly'; // 已买入但买卖计划残缺（买入区间/止损缺失） // 14:55 选中但 14:57 复核未成交（价格超出买入区间/停牌）
 
 /** 异常标注中文文案（唯一出处；逻辑层只用 key） */
 export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
@@ -134,6 +135,7 @@ export const ANOMALY_LABELS: Record<WinRateAnomaly, string> = {
   snapshot_missing: '快照缺失（当天未生成收盘快照）',
   intraday_unfilled: '14:57 复核未成交（价格超出买入区间）',
   t_plus_1_violation: 'T+1 违规（同日买卖，已排除分母）',
+  missing_plan_anomaly: '计划残缺（缺买入区间/止损，已排除分母）',
   high_open_over_target1: '高开越过目标一(未成交)',
 };
 

@@ -44,6 +44,7 @@ import { friendlyMarketError, countBreadth, canUseStale, MARKET_FETCH_FAILED_TEX
 import { resolvePrevClose, calcPrevChange, isUsablePrevClose, firstValidPrice } from '../src/lib/prev-close';
 import { isPlanTradable, isSameDayClose } from '../src/lib/trade-plan-validity';
 import { describeBuyRange } from '../src/lib/buy-range-label';
+import { isPlanIncomplete, isMissingPlanAnomaly } from '../src/lib/plan-missing';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -1633,7 +1634,7 @@ function runEntryEngineAssertion() {
   {
     const mb = (date: string, open: number, high: number, low: number, close: number): MinuteBar =>
       ({ date, open, high, low, close });
-    const plan = { buyLow: 10, buyHigh: 10.5 };
+    const plan = { buyLow: 10, buyHigh: 10.5, stop: 9.5 };
     const inRange = [
       mb('2026-01-02 09:30:00', 10.2, 10.3, 10.1, 10.25),
       mb('2026-01-02 09:31:00', 10.3, 10.4, 10.2, 10.35),
@@ -1642,8 +1643,8 @@ function runEntryEngineAssertion() {
     check(evaluateIntradayEntry(inRange, plan, undefined).kind === 'skip', '老记录缺省 entryStyle → skip（零回归）');
     check(evaluateIntradayEntry([], plan, 'instant').kind === 'skip', '空 bars → skip');
     check(
-      evaluateIntradayEntry(inRange, { buyLow: null, buyHigh: null }, 'instant').kind === 'skip',
-      '无买入计划 → skip（涨停票不误买）',
+      evaluateIntradayEntry(inRange, { buyLow: null, buyHigh: null }, 'instant').kind === 'invalid',
+      '无买入计划 → invalid（死规矩禁止半截计划买入）',
     );
 
     const d1 = evaluateIntradayEntry(inRange, plan, 'instant');
@@ -1690,7 +1691,7 @@ function runEntryEngineAssertion() {
   section('盘中买入引擎 N6：evaluateDailyEntryFallback 日K兜底翻案');
   {
     const dayK = { open: 10.8, high: 10.9, low: 10.05, close: 10.85 }; // 开盘超买高，但日内跌进区间
-    const plan = { buyLow: 10, buyHigh: 10.5 };
+    const plan = { buyLow: 10, buyHigh: 10.5, stop: 9.5 };
     const f = evaluateDailyEntryFallback(dayK, plan, 'intraday_limit');
     check(f != null && f.buyPrice === 10.5, '14:50 未成交但日K曾跌进区间 → 翻案买入（clamp 到买高）');
     check(evaluateDailyEntryFallback(dayK, plan, 'instant') === null, 'instant 不走日K翻案（与开盘口径一致）');
@@ -2395,6 +2396,39 @@ function runBuyRangeLabelAssertion() {
   }
 }
 
+function runPlanHardGateAssertion() {
+  section('计划死规矩 G1：buyLow/stop 缺失一律不可交易');
+  {
+    check(isPlanIncomplete({ buyLow: null, stop: 3.5 }), 'buyLow 为空 → 残缺');
+    check(isPlanIncomplete({ buyLow: 11.8, stop: null }), 'stop 为空 → 残缺');
+    check(isPlanIncomplete({ buyLow: 11.8, stop: 0 }), 'stop=0 → 残缺');
+    check(!isPlanIncomplete({ buyLow: 11.8, stop: 11.2 }), '两者有效 → 完整');
+  }
+
+  section('计划死规矩 G2：已买入 + 残缺 → 强制标异常');
+  {
+    check(isMissingPlanAnomaly({ buyLow: null, stop: null, buyPrice: 3.68 }),
+          '600408 那种已买入但计划全空 → 异常');
+    check(!isMissingPlanAnomaly({ buyLow: null, stop: null, buyPrice: null }),
+          '未买入的占位记录不算异常');
+  }
+
+  section('计划死规矩 G3：三处硬拦截均已落到代码');
+  {
+    const minute = fs.readFileSync('src/lib/winrate-minute.ts', 'utf8');
+    check(minute.includes("if (plan.buyLow == null || plan.stop == null") , 'evaluateIntradayEntry 死规矩');
+    const monitor = fs.readFileSync('src/hooks/useIntradayMonitor.ts', 'utf8');
+    check(monitor.includes("dec.kind === 'invalid'"), '监控层处理 invalid 决策');
+    const rec = fs.readFileSync('src/hooks/useWinRateRecorder.ts', 'utf8');
+    check(rec.includes('planIncomplete && trade.buyPrice != null'), 'settleOpenRecords 死规矩');
+    const store = fs.readFileSync('src/hooks/useWinRateStore.ts', 'utf8');
+    check(store.includes('isMissingPlanAnomaly('), '存量加载清洗');
+    const tp = fs.readFileSync('server/strategies/tradeplan.mjs', 'utf8');
+    check(tp.includes('ind.dragon?.prevLimitBase ?? ind.prevLimitBase'),
+          '龙回头字段路径已治本');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2430,6 +2464,7 @@ async function main() {
   runPrevCloseAssertion();
   runT1AndPlanAssertion();
   runBuyRangeLabelAssertion();
+  runPlanHardGateAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

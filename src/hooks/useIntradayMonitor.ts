@@ -251,6 +251,8 @@ function processCode(
       const plan: EntryPlan = {
         buyLow: r.buyLow,
         buyHigh: r.buyHigh,
+        // 【死规矩】止损必须一并传入，缺失时 evaluateIntradayEntry 直接判 invalid
+        stop: r.stop,
         limitUpPrice: q?.limitUpPrice ?? null,
       };
       const dec = evaluateIntradayEntry(dayBars, plan, r.entryStyle);
@@ -265,6 +267,15 @@ function processCode(
           monitorBought: true,
           entrySource: 'intraday',
           intradayEntryResolved: 'bought',
+        });
+      } else if (dec.kind === 'invalid') {
+        // 半截计划（buyLow 或 stop 缺失）→ 终态 invalid，强制排除分母，绝不进持仓
+        updateTrade(r.id, {
+          ...intradayCleanupFields(r),
+          status: 'invalid',
+          excludedFromStats: true,
+          invalidReason: '买卖计划残缺（买入区间或止损缺失），禁止买入',
+          anomalies: [...new Set([...(r.trade.anomalies || []), 'missing_plan_anomaly' as never])],
         });
       } else if (dec.kind === 'unfilled') {
         // instant 9:30 一次性判定未成交 → 软标记（status 仍 open），晚间日K兜底有权复判

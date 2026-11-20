@@ -595,6 +595,23 @@ export function useWinRateRecorder() {
           const bi = daily.findIndex((r) => r.date === trade.buyDate);
           if (bi >= 0 && bi + 1 < daily.length) tPlus1SellDate = daily[bi + 1].date;
         }
+        // 【最终死规矩】日K兜底结算同样不许让半截计划成交：
+        // 一旦 buyLow 或 stop 缺失，即便 simulateTrade 给出了 buyPrice，也必须判 invalid。
+        const planIncomplete =
+          rec.buyLow == null ||
+          rec.stop == null ||
+          !Number.isFinite(rec.stop) ||
+          rec.stop <= 0;
+        if (planIncomplete && trade.buyPrice != null) {
+          trade.status = 'invalid';
+          trade.buyPrice = null;
+          trade.sellPrice = null;
+          trade.sellDate = null;
+          trade.returnPct = null;
+          trade.excludedFromStats = true;
+          trade.invalidReason = '买卖计划残缺（买入区间或止损缺失），禁止买入';
+          trade.anomalies = [...new Set([...(trade.anomalies || []), 'missing_plan_anomaly' as never])];
+        }
         const ok = updateTrade(rec.id, {
           buyDate: trade.buyDate,
           buyPrice: trade.buyPrice,
