@@ -96,8 +96,10 @@ export function calculateTreemap(
     key: b.key,
     weight: Math.max(amounts[i], floor),
   }));
-  // 大块优先：squarified 算法的标准前提，保证布局稳定且正方形度高
-  items.sort((a, b) => b.weight - a.weight);
+  // 【尊重外部顺序】不再按权重重排：调用方传入的顺序就是用户选的排序口径
+  // （涨跌幅降序 → 红到绿拼图；成交额降序 → 大块聚左上）。
+  // 面积仍严格由 weight(=成交额) 决定，只是视觉排列顺序交给用户；
+  // 非权重顺序时 squarified 的长宽比可能略差，这是用户明确接受的妥协。
 
   const totalWeight = items.reduce((s, it) => s + it.weight, 0);
   const scale = (W * H) / totalWeight;

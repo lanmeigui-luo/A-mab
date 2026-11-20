@@ -2502,6 +2502,28 @@ function runBoardHeatAssertion() {
           '色块用绝对坐标定位');
     check(page.includes('calculateTreemap('), '渲染层使用 treemap 算法');
   }
+
+  section('热力图 H4：输入顺序=用户排序口径，面积仍由成交额决定');
+  {
+    const boards = [
+      { key: 'small', amount: 100_000_000 },
+      { key: 'big', amount: 9_000_000_000 },
+      { key: 'mid', amount: 3_000_000_000 },
+    ];
+    const cells = calculateTreemap(boards, 1200, 540);
+    check(cells.map((c) => c.key).join(',') === 'small,big,mid',
+          '输出顺序严格等于输入顺序（不再内部按权重重排）');
+    const area = (k: string) => {
+      const c = cells.find((x) => x.key === k)!;
+      return c.rect.width * c.rect.height;
+    };
+    check(area('big') > area('mid') && area('mid') > area('small'),
+          '面积依然严格按成交额：big > mid > small');
+    const heat = fs.readFileSync('src/lib/board-heat.ts', 'utf8');
+    check(!heat.includes('items.sort('), '算法内部没有覆盖外部顺序的硬编码排序');
+    const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
+    check(page.includes('[rows, heatSize]'), '排序变化经 rows → cells 依赖链触发重算');
+  }
 }
 
 // ───────── 入口 ─────────
