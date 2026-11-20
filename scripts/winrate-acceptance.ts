@@ -2635,13 +2635,34 @@ function runAdaptiveAssertion() {
 
   section('自适应 K2：文字分级相对阈值 + 已知缺陷锁定');
   {
-    const r = { width: 100, height: 100 };
-    check(textLevel(r, 84, 1200, 540) === 0, '大块 → L0');
-    check(textLevel({ width: 60, height: 40 }, 172, 1200, 540) === 1, '中等块 → L1');
-    check(textLevel({ width: 25, height: 18 }, 172, 1200, 540) === 2, '极小块 → L2');
+    // avgArea(84)=7714, avgArea(172)=3767（area 口径）
+    check(textLevel({ width: 90, height: 90 }, 84, 1200, 540) === 0, '8100px² → L0');
+    check(textLevel({ width: 60, height: 40 }, 172, 1200, 540) === 1, '2400px² → L1');
+    check(textLevel({ width: 25, height: 18 }, 172, 1200, 540) === 2, '450px² → L2');
     check(heatFloor(1200, 540, 0) === 0, 'n=0 → 地板0');
     const heat = fs.readFileSync('src/lib/board-heat.ts', 'utf8');
     check(heat.includes('已知缺陷，暂不修'), '领涨股面积口径已知缺陷已注释');
+  }
+}
+
+
+function runShapeAssertion() {
+  section('形状 S1：纯 squarify 满足 max aspect ≤8 且最小短边 ≥12px');
+  {
+    const boards = Array.from({ length: 84 }, (_, i) => ({
+      key: 'k' + i,
+      amount: (84 - i) * 100_000_000,
+      changePct: 2 - i * 0.08,
+    }));
+    const cells = calculateTreemap(boards, 1200, 540, 'pct_desc');
+    const maxAspect = Math.max(...cells.map((c) =>
+      Math.max(c.rect.width / c.rect.height, c.rect.height / c.rect.width)));
+    const minShort = Math.min(...cells.map((c) => Math.min(c.rect.width, c.rect.height)));
+    check(maxAspect <= 8, 'max aspect ≤8（实际 ' + maxAspect.toFixed(2) + '）');
+    check(minShort >= 12, '最小短边 ≥12px（实际 ' + minShort.toFixed(1) + 'px）');
+    const heat = fs.readFileSync('src/lib/board-heat.ts', 'utf8');
+    check(!heat.includes('worstAspect([...row, queue[0]], scale, shortSide) <= 4'),
+          '元凶约束 worstAspect<=4 已移除');
   }
 }
 
@@ -2685,6 +2706,7 @@ async function main() {
   runFinalCloseoutAssertion();
   runCloseout2Assertion();
   runAdaptiveAssertion();
+  runShapeAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

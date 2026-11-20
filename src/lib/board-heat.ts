@@ -52,10 +52,11 @@ export function heatFloor(width: number, height: number, n: number): number {
 /** 文字分级：阈值从平均块短边推导，不随视图硬编码 */
 export type TextLevel = 0 | 1 | 2;
 export function textLevel(rect: { width: number; height: number }, n: number, W: number, H: number): TextLevel {
-  const short = Math.min(rect.width, rect.height);
-  const avgShort = Math.sqrt((W * H) / Math.max(n, 1));
-  if (short >= avgShort * 0.9) return 0;
-  if (short >= avgShort * 0.55) return 1;
+  // 【area 口径】信息量由面积决定；short 是布局产物，受长宽比影响，不用于分级。
+  const area = rect.width * rect.height;
+  const avgArea = (W * H) / Math.max(n, 1);
+  if (area >= avgArea * 0.8) return 0;
+  if (area >= avgArea * 0.35) return 1;
   return 2;
 }
 
@@ -176,10 +177,10 @@ export function calculateTreemap(
     // 贪心成行：不断加入下一项，只要最差长宽比不恶化
     const row: WorkItem[] = [queue[0]];
     queue = queue.slice(1);
-    // 【4:1 硬约束】成行时强制 worst ≤ 4；单项超限时单独成行并留作已知风险。
+    // 【对照实验结论】上一版 worstAspect<=4 逼迫提前断行、剩余矩形越切越扁，
+    // 实测把 maxAspect 从 1.41/1.96 恶化到 36/77 —— 已移除，恢复纯 squarify。
     while (queue.length &&
-           worstAspect([...row, queue[0]], scale, shortSide) <= worstAspect(row, scale, shortSide) &&
-           worstAspect([...row, queue[0]], scale, shortSide) <= 4) {
+           worstAspect([...row, queue[0]], scale, shortSide) <= worstAspect(row, scale, shortSide)) {
       row.push(queue[0]);
       queue = queue.slice(1);
     }
