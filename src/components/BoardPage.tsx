@@ -7,6 +7,7 @@ import {
   heatColor,
   calculateTreemap,
   isBoardDataMissing,
+  textLevel,
   primaryMetric,
   secondaryMetric,
 } from '@/lib/board-heat';
@@ -346,8 +347,8 @@ export function BoardPage({
             const heat = heatColor(b.changePct);
             const primary = primaryMetric(b, sort);
             const secondary = secondaryMetric(b, sort);
-            // 过小的块只留板块名 + 主指标，其余信息全部进 hover title
-            const tiny = cell.rect.width < 60 || cell.rect.height < 46;
+            // 文字等级随板块数自适应（平均块短边推导），不再硬编码 60/46
+            const level = textLevel(cell.rect, heatRows.length, heatSize.w, heatSize.h);
             const title = [
               b.name,
               `成交额 ${yuan(b.amount)}`,
@@ -359,7 +360,7 @@ export function BoardPage({
             return (
               <button
                 key={cell.key}
-                className={`heat-tile${tiny ? ' heat-tile-tiny' : ''}`}
+                className={`heat-tile heat-l${level}`}
                 style={{
                   left: cell.rect.left,
                   top: cell.rect.top,
@@ -373,7 +374,7 @@ export function BoardPage({
               >
                 <span className="heat-name">{b.name}</span>
                 <span className="heat-pct">{primary.text}</span>
-                {!tiny && <span className="heat-lead">{secondary.text}</span>}
+                {level === 0 && <span className="heat-lead">{secondary.text}</span>}
               </button>
             );
           })}

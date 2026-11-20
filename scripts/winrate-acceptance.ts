@@ -49,6 +49,8 @@ import {
   heatColor,
   calculateTreemap,
   isBoardDataMissing,
+  heatFloor,
+  textLevel,
   primaryMetric,
   secondaryMetric,
 } from '../src/lib/board-heat';
@@ -2499,8 +2501,8 @@ function runBoardHeatAssertion() {
     check(avg < 3.5, '平均长宽比接近 1（实际 ' + avg.toFixed(2) + '）');
     const big = cells.find((c) => c.key === 'k0')!;
     const small = cells.find((c) => c.key === 'k19')!;
-    check(big.rect.width * big.rect.height > small.rect.width * small.rect.height * 15,
-          '高成交额板块面积显著大于低成交额');
+    check(big.rect.width * big.rect.height > small.rect.width * small.rect.height * 10,
+          '高成交额板块面积显著大于低成交额（相对地板下阈值放宽）');
     check(calculateTreemap([], 1200, 540).length === 0, '空列表返回空数组');
     const extreme = calculateTreemap([
       { key: 'huge', amount: 9_300_000_000 },
@@ -2612,8 +2614,34 @@ function runCloseout2Assertion() {
     }));
     const cells = calculateTreemap(boards, 1200, 540, 'amount');
     const minShort = Math.min(...cells.map((c) => Math.min(c.rect.width, c.rect.height)));
-    check(minShort >= 36, '最小块短边 ≥36px（实际 ' + minShort.toFixed(1) + 'px）');
+    const floor = heatFloor(1200, 540, boards.length);
+    check(Number.isFinite(floor) && floor > 0, '地板为有限正数（相对口径，不再保证绝对短边36px）');
+    check(minShort > 0, '短边为正（实际最小 ' + minShort.toFixed(1) + 'px）');
     check(cells.every((c) => c.rect.width > 0 && c.rect.height > 0), '无 0 面积');
+  }
+}
+
+
+function runAdaptiveAssertion() {
+  section('自适应 K1：n 口径与相对地板');
+  {
+    check(Math.abs(heatFloor(1200, 540, 31) - 2508) < 2, '31 块地板≈2508px²');
+    check(Math.abs(heatFloor(1200, 540, 84) - 925) < 2, '84 块地板≈925px²');
+    check(Math.abs(heatFloor(1200, 540, 172) - 452) < 2, '172 块地板≈452px²');
+    check(heatFloor(1200, 540, 172) < heatFloor(1200, 540, 31), '地板随 n 反向缩放');
+    const heat = fs.readFileSync('src/lib/board-heat.ts', 'utf8');
+    check(heat.includes('n = boards.length（调用方已排除无数据板块）'), 'n 口径注释已落');
+  }
+
+  section('自适应 K2：文字分级相对阈值 + 已知缺陷锁定');
+  {
+    const r = { width: 100, height: 100 };
+    check(textLevel(r, 84, 1200, 540) === 0, '大块 → L0');
+    check(textLevel({ width: 60, height: 40 }, 172, 1200, 540) === 1, '中等块 → L1');
+    check(textLevel({ width: 25, height: 18 }, 172, 1200, 540) === 2, '极小块 → L2');
+    check(heatFloor(1200, 540, 0) === 0, 'n=0 → 地板0');
+    const heat = fs.readFileSync('src/lib/board-heat.ts', 'utf8');
+    check(heat.includes('已知缺陷，暂不修'), '领涨股面积口径已知缺陷已注释');
   }
 }
 
@@ -2656,6 +2684,7 @@ async function main() {
   runBoardHeatAssertion();
   runFinalCloseoutAssertion();
   runCloseout2Assertion();
+  runAdaptiveAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);
@@ -2717,7 +2746,7 @@ function runFinalCloseoutAssertion() {
     check(areas.every((a) => Number.isFinite(a) && a > 0), '健壮性：无 NaN / 无 0 面积');
     const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
     check(page.includes('面积 = 当前排序字段 · 颜色 = 涨跌幅'), '右下角图例已加');
-    check(page.includes('cell.rect.width < 60 || cell.rect.height < 46'), '小块降级为名+主指标');
+    check(page.includes('textLevel(cell.rect, heatRows.length'), '小块降级按相对阈值分级');
   }
 }
 

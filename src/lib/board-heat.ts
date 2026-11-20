@@ -41,6 +41,25 @@ export interface TreemapItem {
 export type TreemapWeightMode = 'amount' | 'amount_asc' | 'pct_desc' | 'pct_asc';
 
 /**
+ * 【n 的唯一口径】n = 参与布局的块数（调用方 heatRows.length，已排除无数据板块）。
+ * 地板按 n 相对计算；排除数变化会导致地板整体缩放，属可接受行为。
+ */
+export function heatFloor(width: number, height: number, n: number): number {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(n) || n <= 0) return 0;
+  return ((width * height) / n) * 0.12;
+}
+
+/** 文字分级：阈值从平均块短边推导，不随视图硬编码 */
+export type TextLevel = 0 | 1 | 2;
+export function textLevel(rect: { width: number; height: number }, n: number, W: number, H: number): TextLevel {
+  const short = Math.min(rect.width, rect.height);
+  const avgShort = Math.sqrt((W * H) / Math.max(n, 1));
+  if (short >= avgShort * 0.9) return 0;
+  if (short >= avgShort * 0.55) return 1;
+  return 2;
+}
+
+/**
  * 【P1 无数据判据】上游 AkShare 对无行情板块会返回 amount/volume/avgPrice 全 0
  * 且 leadName='--' 的占位记录（实测「社会工作」hangye_ZQ84）。这类记录不得进入 treemap，
  * 否则会被 +1 / 地板放大成巨大的误导性色块。
@@ -123,19 +142,19 @@ export function calculateTreemap(
     if (weightMode === 'pct_desc') return pctValues[i] - minPct + 1;
     if (weightMode === 'pct_asc') return maxPct - pctValues[i] + 1;
     if (weightMode === 'amount_asc') return maxAmount - amountValues[i] + 1;
+    // 已知缺陷，暂不修：领涨股排序键按 leadChangePct 排列，但面积口径仍是 amount（fallback）。
     return amountValues[i];
   });
-  // 【P1 像素地板】旧 1% 地板在真实数据下只给 367px²(19×19)，不可读。
-  // 新口径：目标最小块 3200px²（≈57×57），实测保证短边 ≥36px；反推权重地板。
-  // 推导：f/(Σraw+n·f)·A ≥ 1600 ⇒ f ≥ 1600·Σraw/(A-1600·n)。
-  // 这会刻意牺牲小板块之间的相对比例，换取每块都可点击可读。
+  // 【自适应地板】旧 3200px² 在 172 板块下等于平均块的 85%，把面积差异全抹平。
+  // 新口径：目标面积 = (容器面积 ÷ n) × 0.12，n = boards.length（调用方已排除无数据板块）。
+  // 反推权重地板：f/(Σraw+n·f)·A ≥ target ⇒ f ≥ target·Σraw/(A - target·n)。
   const containerArea = W * H;
   const rawSum = raw.reduce((t, v) => t + v, 0);
-  const targetArea = 3200;
+  const targetArea = heatFloor(W, H, boards.length);
   const pixelFloor = rawSum > 0 && containerArea > targetArea * boards.length
     ? (targetArea * rawSum) / (containerArea - targetArea * boards.length)
     : 0;
-  const floor = Math.max(Math.max(...raw, 1) * 0.01, pixelFloor);
+  const floor = pixelFloor;
   const items: WorkItem[] = boards.map((b, i) => ({
     key: b.key,
     weight: Math.max(raw[i], floor),
@@ -157,7 +176,10 @@ export function calculateTreemap(
     // 贪心成行：不断加入下一项，只要最差长宽比不恶化
     const row: WorkItem[] = [queue[0]];
     queue = queue.slice(1);
-    while (queue.length && worstAspect([...row, queue[0]], scale, shortSide) <= worstAspect(row, scale, shortSide)) {
+    // 【4:1 硬约束】成行时强制 worst ≤ 4；单项超限时单独成行并留作已知风险。
+    while (queue.length &&
+           worstAspect([...row, queue[0]], scale, shortSide) <= worstAspect(row, scale, shortSide) &&
+           worstAspect([...row, queue[0]], scale, shortSide) <= 4) {
       row.push(queue[0]);
       queue = queue.slice(1);
     }

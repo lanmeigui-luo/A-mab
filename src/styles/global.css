@@ -749,9 +749,16 @@ button.idx-card:hover {
   border: 1px solid #D1D5DB;
   border-radius: 3px;
 }
-.heat-tile-tiny { padding: 3px 4px; gap: 0; }
-.heat-tile-tiny .heat-name { font-size: 10px; }
-.heat-tile-tiny .heat-pct { font-size: 12px; }
+.heat-l0 { padding: 5px 7px; gap: 2px; }
+.heat-l0 .heat-name { font-size: 11px; }
+.heat-l0 .heat-pct { font-size: 16px; }
+.heat-l0 .heat-lead { font-size: 10px; }
+.heat-l1 { padding: 3px 5px; gap: 1px; }
+.heat-l1 .heat-name { font-size: 10px; }
+.heat-l1 .heat-pct { font-size: 13px; }
+.heat-l2 { padding: 2px 3px; gap: 0; }
+.heat-l2 .heat-name { font-size: 9px; }
+.heat-l2 .heat-pct { font-size: 11px; }
 .heat-legend {
   position: absolute;
   right: 8px;
