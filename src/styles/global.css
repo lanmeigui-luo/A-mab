@@ -694,6 +694,58 @@ button.idx-card:hover {
 }
 
 /* 板块卡片视图 */
+/* 板块热力图：12 列 CSS Grid + 成交额面积档位，红涨绿跌六档由 JS 配色 */
+.board-heatmap {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 58px;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.heat-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 5px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.heat-tile:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+  z-index: 1;
+}
+.heat-name {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.heat-pct {
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.heat-col-3 .heat-pct { font-size: 22px; }
+.heat-lead {
+  font-size: 10px;
+  opacity: 0.88;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 900px) {
+  .board-heatmap { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+
 .board-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));

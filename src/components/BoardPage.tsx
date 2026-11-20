@@ -3,6 +3,7 @@ import type { BoardConsResponse, BoardRow, BoardStock, BoardType } from '@/domai
 import { BOARD_TYPES } from '@/domain/board';
 import { marketApi } from '@/services/market';
 import { changeColor, formatPct } from '@/lib/market-colors';
+import { heatColor, heatSpan } from '@/lib/board-heat';
 import { DASH, fmtNum } from '@/lib/format';
 import { DeepAnalysis } from '@/components/DeepAnalysis';
 
@@ -18,7 +19,7 @@ interface Props {
 
 type SortKey = 'changePct' | 'amount' | 'leadChangePct';
 /** 视图模式：卡片视图突出涨跌幅/领涨股，列表视图看全字段 */
-type ViewMode = 'list' | 'card';
+type ViewMode = 'heatmap' | 'list';
 
 function yuan(v: number | null): string {
   if (v == null) return DASH;
@@ -214,7 +215,7 @@ export function BoardPage({
   onOpenKline,
 }: Props & { onOpenKline: (fullCode: string, name: string) => void }) {
   const [keyword, setKeyword] = useState('');
-  const [view, setView] = useState<ViewMode>('list');
+  const [view, setView] = useState<ViewMode>('heatmap');
   const [sort, setSort] = useState<SortKey>('changePct');
   const [desc, setDesc] = useState(true);
   const [detail, setDetail] = useState<BoardRow | null>(null);
@@ -278,8 +279,8 @@ export function BoardPage({
         {/* 卡片 / 列表视图切换（需求第六章） */}
         <div className="seg">
           {([
+            { k: 'heatmap', label: '热力图' },
             { k: 'list', label: '列表' },
-            { k: 'card', label: '卡片' },
           ] as { k: ViewMode; label: string }[]).map((v) => (
             <button
               key={v.k}
@@ -297,38 +298,37 @@ export function BoardPage({
       {loading && !list && <div className="empty">加载中…</div>}
       {!loading && rows.length === 0 && <div className="empty">未找到匹配板块</div>}
 
-      {rows.length > 0 && view === 'card' && (
-        <div className="board-cards">
-          {rows.map((b) => (
-            <button key={b.label} className="board-card" onClick={() => setDetail(b)}>
-              <div className="bc-top">
-                <span className="bc-name">{b.name}</span>
-                <span className="bc-pct" style={{ color: changeColor(b.changePct) }}>
+      {rows.length > 0 && view === 'heatmap' && (
+        <div className="board-heatmap">
+          {rows.map((b) => {
+            const heat = heatColor(b.changePct);
+            const span = heatSpan(b.amount);
+            const hasLead = !!(b.leadName && b.leadName.trim());
+            return (
+              <button
+                key={b.label}
+                className={`heat-tile heat-col-${span.col}`}
+                style={{
+                  gridColumn: `span ${span.col}`,
+                  gridRow: `span ${span.row}`,
+                  backgroundColor: heat.background,
+                  color: heat.foreground,
+                }}
+                onClick={() => setDetail(b)}
+                title={`${b.name} · 成交额 ${yuan(b.amount)}${hasLead ? '' : ' · 领涨股数据源暂未提供'}`}
+              >
+                <span className="heat-name">{b.name}</span>
+                <span className="heat-pct">
                   {b.changePct != null ? formatPct(b.changePct) + '%' : DASH}
                 </span>
-              </div>
-              <div className="bc-row">
-                <span className="muted">成交额</span>
-                <span className="mono">{yuan(b.amount)}</span>
-              </div>
-              <div className="bc-row">
-                <span className="muted">领涨股</span>
-                <span>
-                  {b.leadName ?? DASH}
-                  {b.leadChangePct != null && (
-                    <em style={{ color: changeColor(b.leadChangePct), fontStyle: 'normal' }}>
-                      {' '}{formatPct(b.leadChangePct)}%
-                    </em>
-                  )}
+                <span className="heat-lead" title={hasLead ? undefined : '数据源暂未提供'}>
+                  {hasLead
+                    ? `${b.leadName} ${b.leadChangePct != null ? formatPct(b.leadChangePct) + '%' : ''}`
+                    : '领涨股 —'}
                 </span>
-              </div>
-              <div className="bc-row">
-                <span className="muted">公司家数</span>
-                <span className="mono">{b.count ?? DASH}</span>
-              </div>
-              <div className="bc-foot muted">点击看成分股 · 净流入未接入</div>
-            </button>
-          ))}
+              </button>
+            );
+          })}
         </div>
       )}
 

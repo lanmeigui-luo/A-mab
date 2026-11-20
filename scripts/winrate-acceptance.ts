@@ -45,6 +45,7 @@ import { resolvePrevClose, calcPrevChange, isUsablePrevClose, firstValidPrice } 
 import { isPlanTradable, isSameDayClose } from '../src/lib/trade-plan-validity';
 import { describeBuyRange } from '../src/lib/buy-range-label';
 import { isPlanIncomplete, isMissingPlanAnomaly } from '../src/lib/plan-missing';
+import { heatColor, heatSpan } from '../src/lib/board-heat';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2429,6 +2430,44 @@ function runPlanHardGateAssertion() {
   }
 }
 
+function runBoardHeatAssertion() {
+  section('热力图 H1：六档颜色边界（红涨绿跌）');
+  {
+    check(heatColor(3.01).level === 'strong-up', '>3% 深红');
+    check(heatColor(3).level === 'up', '=3% 中红');
+    check(heatColor(1).level === 'up', '=1% 中红');
+    check(heatColor(0.5).level === 'light-up', '0~1% 浅红');
+    check(heatColor(0).level === 'light-down', '=0% 浅绿');
+    check(heatColor(-1).level === 'light-down', '=-1% 浅绿（左闭右开）');
+    check(heatColor(-3).level === 'down', '=-3% 中绿');
+    check(heatColor(-3.01).level === 'strong-down', '<-3% 深绿');
+    check(heatColor(null).level === 'flat', '缺失 → 中性灰');
+  }
+
+  section('热力图 H2：文字对比度（深底白字 / 浅底深字）');
+  {
+    check(heatColor(4).foreground === '#FFFFFF', '深红底 → 白字');
+    check(heatColor(-4).foreground === '#FFFFFF', '深绿底 → 白字');
+    check(heatColor(0.5).foreground === '#7F1D1D', '浅红底 → 深红字');
+    check(heatColor(-0.5).foreground === '#14532D', '浅绿底 → 深绿字');
+  }
+
+  section('热力图 H3：成交额面积分档 + 视图默认值');
+  {
+    check(heatSpan(5_000_000_000).col === 3 && heatSpan(5_000_000_000).row === 2, '≥50亿 → 3×2');
+    check(heatSpan(2_000_000_000).col === 2 && heatSpan(2_000_000_000).row === 2, '≥20亿 → 2×2');
+    check(heatSpan(800_000_000).col === 2 && heatSpan(800_000_000).row === 1, '≥8亿 → 2×1');
+    check(heatSpan(0).col === 1 && heatSpan(null).col === 1, '无量/缺失 → 最小块');
+    const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
+    check(page.includes("useState<ViewMode>('heatmap')"), '默认进入热力图');
+    check(page.includes("type ViewMode = 'heatmap' | 'list'"), '仅两种模式（卡片已被取代）');
+    check(page.includes('heatSpan(b.amount)'), '面积按成交额');
+    check(!page.includes('boardCons(') || page.includes('boardCons(board.label)'),
+          '领涨股不额外并发请求（仅详情抽屉按需拉取）');
+    check(page.includes('数据源暂未提供'), '无领涨股时 hover 提示');
+  }
+}
+
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2465,6 +2504,7 @@ async function main() {
   runT1AndPlanAssertion();
   runBuyRangeLabelAssertion();
   runPlanHardGateAssertion();
+  runBoardHeatAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);
