@@ -29,9 +29,14 @@ export function heatColor(pct: number | null | undefined): HeatColor {
 export interface TreemapItem {
   /** 稳定标识（板块 label） */
   key: string;
-  /** 权重：成交额（元）。null/负数按最小权重 1 处理，绝不产生 0 面积 */
+  /** 成交额（元）；amount 模式下作为权重 */
   amount: number | null | undefined;
+  /** 涨跌幅（%）；absPct 模式下取绝对值作为权重 */
+  changePct?: number | null;
 }
+
+/** 权重口径：成交额体量 / 涨跌幅极端程度 */
+export type TreemapWeightMode = 'amount' | 'absPct';
 
 export interface TreemapRect {
   left: number;
@@ -80,25 +85,32 @@ export function calculateTreemap(
   boards: TreemapItem[],
   containerWidth: number,
   containerHeight: number,
+  weightMode: TreemapWeightMode = 'amount',
 ): TreemapCell[] {
   const W = Number.isFinite(containerWidth) ? Math.max(0, containerWidth) : 0;
   const H = Number.isFinite(containerHeight) ? Math.max(0, containerHeight) : 0;
   if (!boards.length || W <= 0 || H <= 0) return [];
 
-  // 【最小可读面积】真实数据成交额可从 0 跨到 93 亿；若按原值比例，
-  // 零成交额板块会被压成 0px² 且长宽比爆炸。给 1% 最大额的权重地板：
-  // 大板块之间仍严格按成交额排序与比例，小板块保住可读面积（非交易时段全体等权也合理）。
-  const amounts = boards.map((b) =>
-    typeof b.amount === 'number' && Number.isFinite(b.amount) && b.amount > 0 ? b.amount : 0,
-  );
-  const floor = Math.max(...amounts, 1) * 0.01;
+  // 【动态权重】面积口径跟随用户选中的排序键：
+  //  - amount  → weight = 成交额（资金体量）
+  //  - absPct  → weight = |涨跌幅|（极端波动的板块最大，视觉冲击最强）
+  //  - 领涨股排序由调用方 fallback 到 amount
+  const raw = boards.map((b) => {
+    if (weightMode === 'absPct') {
+      const pct = b.changePct;
+      return typeof pct === 'number' && Number.isFinite(pct) ? Math.abs(pct) : 0;
+    }
+    return typeof b.amount === 'number' && Number.isFinite(b.amount) && b.amount > 0 ? b.amount : 0;
+  });
+  // 【最小可读面积】最大值 1% 作为权重地板：平盘(0.00%)或无成交额板块
+  // 也能保住一块可点击的最小正方形，不会消失成 0px²。
+  const floor = Math.max(...raw, 1) * 0.01;
   const items: WorkItem[] = boards.map((b, i) => ({
     key: b.key,
-    weight: Math.max(amounts[i], floor),
+    weight: Math.max(raw[i], floor),
   }));
-  // 【尊重外部顺序】不再按权重重排：调用方传入的顺序就是用户选的排序口径
-  // （涨跌幅降序 → 红到绿拼图；成交额降序 → 大块聚左上）。
-  // 面积仍严格由 weight(=成交额) 决定，只是视觉排列顺序交给用户；
+  // 【尊重外部顺序】不再按权重重排：调用方传入的顺序就是用户选的排序口径。
+  // 面积口径与排列口径可以不同（例如涨跌幅排序 + 涨跌幅面积）。
   // 非权重顺序时 squarified 的长宽比可能略差，这是用户明确接受的妥协。
 
   const totalWeight = items.reduce((s, it) => s + it.weight, 0);

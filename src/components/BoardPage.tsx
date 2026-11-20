@@ -250,11 +250,13 @@ export function BoardPage({
   const cells = useMemo(
     () =>
       calculateTreemap(
-        rows.map((b) => ({ key: b.label, amount: b.amount })),
+        // 面积口径跟随排序键：涨跌幅→|涨跌幅|；成交额/领涨股→成交额
+        rows.map((b) => ({ key: b.label, amount: b.amount, changePct: b.changePct })),
         heatSize.w,
         heatSize.h,
+        sort === 'changePct' ? 'absPct' : 'amount',
       ),
-    [rows, heatSize],
+    [rows, heatSize, sort],
   );
 
   return (

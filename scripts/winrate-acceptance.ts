@@ -2503,6 +2503,43 @@ function runBoardHeatAssertion() {
     check(page.includes('calculateTreemap('), '渲染层使用 treemap 算法');
   }
 
+
+  section('热力图 H5：权重口径随排序键切换 + 极值保护 + 面积守恒');
+  {
+    const boards = [
+      { key: 'flat', amount: 8_000_000_000, changePct: 0 },
+      { key: 'crash', amount: 100_000_000, changePct: -4.5 },
+      { key: 'surge', amount: 200_000_000, changePct: 3.2 },
+      { key: 'mild', amount: 500_000_000, changePct: -0.4 },
+    ];
+    const W = 1200, H = 540;
+    const byAmount = calculateTreemap(boards, W, H, 'amount');
+    const byPct = calculateTreemap(boards, W, H, 'absPct');
+    const areaOf = (cells: typeof byAmount, key: string) => {
+      const c = cells.find((x) => x.key === key)!;
+      return c.rect.width * c.rect.height;
+    };
+    check(areaOf(byAmount, 'flat') > areaOf(byAmount, 'crash'),
+          '成交额模式：8亿平盘块 > 1亿暴跌块');
+    check(areaOf(byPct, 'crash') > areaOf(byPct, 'flat'),
+          '涨跌幅模式：跌-4.5%块 > 平盘块（面积口径已切换）');
+    check(areaOf(byPct, 'crash') > areaOf(byPct, 'mild'),
+          '涨跌幅模式：极端波动块大于温和波动块');
+    check(areaOf(byPct, 'flat') > 100,
+          '平盘 0.00% 仍有可点击最小面积（实际 ' + areaOf(byPct, 'flat').toFixed(0) + 'px²）');
+    const sumA = byAmount.reduce((t, c) => t + c.rect.width * c.rect.height, 0);
+    const sumP = byPct.reduce((t, c) => t + c.rect.width * c.rect.height, 0);
+    check(Math.abs(sumA - W * H) / (W * H) < 0.0001 &&
+          Math.abs(sumP - W * H) / (W * H) < 0.0001,
+          '两种权重模式面积均 100% 守恒');
+    check(byAmount.map((c) => c.key).join() === byPct.map((c) => c.key).join(),
+          '切换权重不改排列顺序（顺序仍由用户排序决定）');
+    const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
+    check(page.includes("sort === 'changePct' ? 'absPct' : 'amount'"),
+          '涨幅排序→absPct，成交额/领涨股→amount');
+    check(page.includes('[rows, heatSize, sort]'), 'sort 变化触发重算');
+  }
+
   section('热力图 H4：输入顺序=用户排序口径，面积仍由成交额决定');
   {
     const boards = [
@@ -2522,7 +2559,7 @@ function runBoardHeatAssertion() {
     const heat = fs.readFileSync('src/lib/board-heat.ts', 'utf8');
     check(!heat.includes('items.sort('), '算法内部没有覆盖外部顺序的硬编码排序');
     const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
-    check(page.includes('[rows, heatSize]'), '排序变化经 rows → cells 依赖链触发重算');
+    check(page.includes('[rows, heatSize'), '排序变化经 rows → cells 依赖链触发重算');
   }
 }
 
