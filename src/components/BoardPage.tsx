@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardConsResponse, BoardRow, BoardStock, BoardType } from '@/domain/board';
 import { BOARD_TYPES } from '@/domain/board';
 import { marketApi } from '@/services/market';
 import { changeColor, formatPct } from '@/lib/market-colors';
-import { heatColor, heatSpan } from '@/lib/board-heat';
+import { heatColor, calculateTreemap } from '@/lib/board-heat';
 import { DASH, fmtNum } from '@/lib/format';
 import { DeepAnalysis } from '@/components/DeepAnalysis';
 
@@ -220,6 +220,23 @@ export function BoardPage({
   const [desc, setDesc] = useState(true);
   const [detail, setDetail] = useState<BoardRow | null>(null);
 
+  // Squarified Treemap 需要容器实际像素尺寸：ResizeObserver 跟随窗口/侧栏变化重算。
+  const heatRef = useRef<HTMLDivElement | null>(null);
+  const [heatSize, setHeatSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = heatRef.current;
+    if (!el) return;
+    const update = () => setHeatSize({ w: el.clientWidth, h: el.clientHeight });
+    update();
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(update);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [view]);
+
   const rows = useMemo(() => {
     const arr = (list ?? []).filter((b) => !keyword || (b.name ?? '').includes(keyword));
     return [...arr].sort((a, b) => {
@@ -228,6 +245,17 @@ export function BoardPage({
       return desc ? bv - av : av - bv;
     });
   }, [list, keyword, sort, desc]);
+
+  const rowByLabel = useMemo(() => new Map(rows.map((b) => [b.label, b])), [rows]);
+  const cells = useMemo(
+    () =>
+      calculateTreemap(
+        rows.map((b) => ({ key: b.label, amount: b.amount })),
+        heatSize.w,
+        heatSize.h,
+      ),
+    [rows, heatSize],
+  );
 
   return (
     <section className="panel">
@@ -299,18 +327,21 @@ export function BoardPage({
       {!loading && rows.length === 0 && <div className="empty">未找到匹配板块</div>}
 
       {rows.length > 0 && view === 'heatmap' && (
-        <div className="board-heatmap">
-          {rows.map((b) => {
+        <div className="board-heatmap" ref={heatRef}>
+          {cells.map((cell) => {
+            const b = rowByLabel.get(cell.key);
+            if (!b) return null;
             const heat = heatColor(b.changePct);
-            const span = heatSpan(b.amount);
             const hasLead = !!(b.leadName && b.leadName.trim());
             return (
               <button
-                key={b.label}
-                className={`heat-tile heat-col-${span.col}`}
+                key={cell.key}
+                className="heat-tile"
                 style={{
-                  gridColumn: `span ${span.col}`,
-                  gridRow: `span ${span.row}`,
+                  left: cell.rect.left,
+                  top: cell.rect.top,
+                  width: cell.rect.width,
+                  height: cell.rect.height,
                   backgroundColor: heat.background,
                   color: heat.foreground,
                 }}

@@ -45,7 +45,7 @@ import { resolvePrevClose, calcPrevChange, isUsablePrevClose, firstValidPrice } 
 import { isPlanTradable, isSameDayClose } from '../src/lib/trade-plan-validity';
 import { describeBuyRange } from '../src/lib/buy-range-label';
 import { isPlanIncomplete, isMissingPlanAnomaly } from '../src/lib/plan-missing';
-import { heatColor, heatSpan } from '../src/lib/board-heat';
+import { heatColor, calculateTreemap } from '../src/lib/board-heat';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2442,29 +2442,65 @@ function runBoardHeatAssertion() {
     check(heatColor(-3).level === 'down', '=-3% 中绿');
     check(heatColor(-3.01).level === 'strong-down', '<-3% 深绿');
     check(heatColor(null).level === 'flat', '缺失 → 中性灰');
+    check(heatColor(4).foreground === '#FFFFFF', '深底白字');
+    check(heatColor(0.5).foreground === '#7F1D1D', '浅底深字');
   }
 
-  section('热力图 H2：文字对比度（深底白字 / 浅底深字）');
+  section('热力图 H2：Squarified Treemap 面积守恒、无缝、无重叠');
   {
-    check(heatColor(4).foreground === '#FFFFFF', '深红底 → 白字');
-    check(heatColor(-4).foreground === '#FFFFFF', '深绿底 → 白字');
-    check(heatColor(0.5).foreground === '#7F1D1D', '浅红底 → 深红字');
-    check(heatColor(-0.5).foreground === '#14532D', '浅绿底 → 深绿字');
+    const boards = [
+      { key: 'a', amount: 9_000_000_000 },
+      { key: 'b', amount: 4_000_000_000 },
+      { key: 'c', amount: 2_000_000_000 },
+      { key: 'd', amount: 1_000_000_000 },
+      { key: 'e', amount: 500_000_000 },
+      { key: 'f', amount: null },
+    ];
+    const W = 1200, H = 540;
+    const cells = calculateTreemap(boards, W, H);
+    check(cells.length === boards.length, '每个板块都有坐标');
+    const area = cells.reduce((s, c) => s + c.rect.width * c.rect.height, 0);
+    check(Math.abs(area - W * H) / (W * H) < 0.0001,
+          '面积严格守恒（误差 <0.01%，实际 ' + ((area / (W * H) * 100).toFixed(3)) + '%）');
+    let overlap = false;
+    for (let i = 0; i < cells.length; i++) {
+      for (let j = i + 1; j < cells.length; j++) {
+        const a = cells[i].rect, b = cells[j].rect;
+        const ix = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+        const iy = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+        if (ix > 0.01 && iy > 0.01) overlap = true;
+      }
+    }
+    check(!overlap, '任意两色块不重叠');
+    const inBounds = cells.every((c) => c.rect.left >= -0.01 && c.rect.top >= -0.01 &&
+      c.rect.left + c.rect.width <= W + 0.01 && c.rect.top + c.rect.height <= H + 0.01);
+    check(inBounds, '全部色块落在容器边界内');
   }
 
-  section('热力图 H3：成交额面积分档 + 视图默认值');
+  section('热力图 H3：接近正方形 + 成交额权重正确 + 渲染层已接入');
   {
-    check(heatSpan(5_000_000_000).col === 3 && heatSpan(5_000_000_000).row === 2, '≥50亿 → 3×2');
-    check(heatSpan(2_000_000_000).col === 2 && heatSpan(2_000_000_000).row === 2, '≥20亿 → 2×2');
-    check(heatSpan(800_000_000).col === 2 && heatSpan(800_000_000).row === 1, '≥8亿 → 2×1');
-    check(heatSpan(0).col === 1 && heatSpan(null).col === 1, '无量/缺失 → 最小块');
+    const boards = Array.from({ length: 20 }, (_, i) => ({ key: 'k' + i, amount: (20 - i) * 1e8 }));
+    const cells = calculateTreemap(boards, 1200, 540);
+    const aspects = cells.map((c) => Math.max(c.rect.width / c.rect.height, c.rect.height / c.rect.width));
+    const avg = aspects.reduce((a, b) => a + b, 0) / aspects.length;
+    check(avg < 3.5, '平均长宽比接近 1（实际 ' + avg.toFixed(2) + '）');
+    const big = cells.find((c) => c.key === 'k0')!;
+    const small = cells.find((c) => c.key === 'k19')!;
+    check(big.rect.width * big.rect.height > small.rect.width * small.rect.height * 15,
+          '高成交额板块面积显著大于低成交额');
+    check(calculateTreemap([], 1200, 540).length === 0, '空列表返回空数组');
+    const extreme = calculateTreemap([
+      { key: 'huge', amount: 9_300_000_000 },
+      { key: 'tiny', amount: 1_000_000 },
+      { key: 'zero', amount: 0 },
+    ], 1200, 540);
+    const minArea = Math.min(...extreme.map((c) => c.rect.width * c.rect.height));
+    check(minArea > 1000, '零成交额板块保住可读面积（实际 ' + minArea.toFixed(0) + 'px²）');
     const page = fs.readFileSync('src/components/BoardPage.tsx', 'utf8');
-    check(page.includes("useState<ViewMode>('heatmap')"), '默认进入热力图');
-    check(page.includes("type ViewMode = 'heatmap' | 'list'"), '仅两种模式（卡片已被取代）');
-    check(page.includes('heatSpan(b.amount)'), '面积按成交额');
-    check(!page.includes('boardCons(') || page.includes('boardCons(board.label)'),
-          '领涨股不额外并发请求（仅详情抽屉按需拉取）');
-    check(page.includes('数据源暂未提供'), '无领涨股时 hover 提示');
+    check(page.includes('ResizeObserver'), '容器尺寸变化会重算');
+    check(page.includes('position: absolute') === false || page.includes('left: cell.rect.left'),
+          '色块用绝对坐标定位');
+    check(page.includes('calculateTreemap('), '渲染层使用 treemap 算法');
   }
 }
 

@@ -694,33 +694,32 @@ button.idx-card:hover {
 }
 
 /* 板块卡片视图 */
-/* 板块热力图：12 列 CSS Grid + 成交额面积档位，红涨绿跌六档由 JS 配色 */
+/* 板块热力图：Squarified Treemap，绝对定位铺满容器 */
 .board-heatmap {
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-auto-rows: 58px;
-  gap: 4px;
+  position: relative;
+  width: 100%;
+  height: 540px;
   margin-bottom: 12px;
+  overflow: hidden;
 }
 .heat-tile {
+  position: absolute;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: center;
+  gap: 2px;
   min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 5px;
+  padding: 5px 7px;
+  border: 1px solid #fff;
+  border-radius: 3px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
   overflow: hidden;
-  transition: transform 0.12s, box-shadow 0.12s;
+  transition: filter 0.12s;
 }
-.heat-tile:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
-  z-index: 1;
-}
+.heat-tile:hover { filter: brightness(1.12); z-index: 1; }
 .heat-name {
   font-size: 11px;
   font-weight: 600;
@@ -732,9 +731,9 @@ button.idx-card:hover {
   font-size: 16px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  line-height: 1.1;
+  line-height: 1.05;
+  white-space: nowrap;
 }
-.heat-col-3 .heat-pct { font-size: 22px; }
 .heat-lead {
   font-size: 10px;
   opacity: 0.88;
@@ -742,9 +741,7 @@ button.idx-card:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-@media (max-width: 900px) {
-  .board-heatmap { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-}
+@media (max-width: 900px) { .board-heatmap { height: 420px; } }
 
 .board-cards {
   display: grid;

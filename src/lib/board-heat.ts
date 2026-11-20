@@ -1,14 +1,15 @@
 /**
- * board-heat.ts —— 板块热力图映射（纯函数，可离线验收）
+ * board-heat.ts —— 板块热力图（纯函数，可离线验收）
  *
- * 红涨绿跌六档 + 中性缺失档；面积按【成交额】分档，资金在哪哪个板块就大。
- * 纯 CSS Grid 近似 treemap，不引入任何可视化库。
+ * 布局：Squarified Treemap（Bruls/Huizing/van Wijk）。
+ * 递归沿短边成行、逐行塞入使长宽比最优的项，100% 填满容器、无缝隙，
+ * 每个色块尽可能接近正方形。彻底取代 CSS Grid span 方案。
+ * 颜色：红涨绿跌六档 + 中性缺失档。
  */
 
 export interface HeatColor {
   background: string;
   foreground: string;
-  /** 档位标识，供测试与调试 */
   level: 'strong-up' | 'up' | 'light-up' | 'flat' | 'light-down' | 'down' | 'strong-down';
 }
 
@@ -25,18 +26,126 @@ export function heatColor(pct: number | null | undefined): HeatColor {
   return { background: '#15803D', foreground: '#FFFFFF', level: 'strong-down' };
 }
 
-export interface HeatSpan {
-  /** 横跨列数（12 列栅格） */
-  col: number;
-  /** 纵跨行数 */
-  row: number;
+export interface TreemapItem {
+  /** 稳定标识（板块 label） */
+  key: string;
+  /** 权重：成交额（元）。null/负数按最小权重 1 处理，绝不产生 0 面积 */
+  amount: number | null | undefined;
 }
 
-/** 成交额（元）→ 面积档位。无量/缺失给最小块，避免塌缩或异常放大。 */
-export function heatSpan(amount: number | null | undefined): HeatSpan {
-  if (amount == null || !Number.isFinite(amount) || amount <= 0) return { col: 1, row: 1 };
-  if (amount >= 5_000_000_000) return { col: 3, row: 2 }; // ≥50 亿
-  if (amount >= 2_000_000_000) return { col: 2, row: 2 }; // ≥20 亿
-  if (amount >= 800_000_000) return { col: 2, row: 1 };   // ≥8 亿
-  return { col: 1, row: 1 };
+export interface TreemapRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface TreemapCell extends TreemapItem {
+  rect: TreemapRect;
+}
+
+interface WorkItem {
+  key: string;
+  weight: number;
+}
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** 一行内最差长宽比（越小越接近正方形） */
+function worstAspect(row: WorkItem[], scale: number, shortSide: number): number {
+  if (!row.length || shortSide <= 0) return Infinity;
+  const total = row.reduce((s, it) => s + it.weight, 0) * scale;
+  if (total <= 0) return Infinity;
+  const thickness = total / shortSide;
+  if (thickness <= 0) return Infinity;
+  let worst = 1;
+  for (const it of row) {
+    const side = (it.weight * scale) / thickness;
+    if (side <= 0) return Infinity;
+    worst = Math.max(worst, side / thickness, thickness / side);
+  }
+  return worst;
+}
+
+/**
+ * 纯函数：把板块按成交额映射成填满容器的绝对坐标。
+ * 输出按输入顺序对应（调用方可用 key 找回原记录），面积严格守恒。
+ */
+export function calculateTreemap(
+  boards: TreemapItem[],
+  containerWidth: number,
+  containerHeight: number,
+): TreemapCell[] {
+  const W = Number.isFinite(containerWidth) ? Math.max(0, containerWidth) : 0;
+  const H = Number.isFinite(containerHeight) ? Math.max(0, containerHeight) : 0;
+  if (!boards.length || W <= 0 || H <= 0) return [];
+
+  // 【最小可读面积】真实数据成交额可从 0 跨到 93 亿；若按原值比例，
+  // 零成交额板块会被压成 0px² 且长宽比爆炸。给 1% 最大额的权重地板：
+  // 大板块之间仍严格按成交额排序与比例，小板块保住可读面积（非交易时段全体等权也合理）。
+  const amounts = boards.map((b) =>
+    typeof b.amount === 'number' && Number.isFinite(b.amount) && b.amount > 0 ? b.amount : 0,
+  );
+  const floor = Math.max(...amounts, 1) * 0.01;
+  const items: WorkItem[] = boards.map((b, i) => ({
+    key: b.key,
+    weight: Math.max(amounts[i], floor),
+  }));
+  // 大块优先：squarified 算法的标准前提，保证布局稳定且正方形度高
+  items.sort((a, b) => b.weight - a.weight);
+
+  const totalWeight = items.reduce((s, it) => s + it.weight, 0);
+  const scale = (W * H) / totalWeight;
+  const rect: Rect = { x: 0, y: 0, w: W, h: H };
+  const out = new Map<string, TreemapRect>();
+
+  let queue = items.slice();
+  while (queue.length) {
+    const shortSide = Math.min(rect.w, rect.h);
+    if (shortSide <= 0) break;
+
+    // 贪心成行：不断加入下一项，只要最差长宽比不恶化
+    const row: WorkItem[] = [queue[0]];
+    queue = queue.slice(1);
+    while (queue.length && worstAspect([...row, queue[0]], scale, shortSide) <= worstAspect(row, scale, shortSide)) {
+      row.push(queue[0]);
+      queue = queue.slice(1);
+    }
+
+    const rowArea = row.reduce((s, it) => s + it.weight, 0) * scale;
+    if (rect.w >= rect.h) {
+      // 宽矩形 → 沿短边(高)切一条垂直带，带内自上而下排列
+      const bandW = Math.min(rect.w, rowArea / rect.h);
+      let y = rect.y;
+      for (let i = 0; i < row.length; i++) {
+        const it = row[i];
+        const isLast = i === row.length - 1;
+        const h = isLast ? rect.y + rect.h - y : (it.weight * scale) / bandW;
+        out.set(it.key, { left: rect.x, top: y, width: bandW, height: h });
+        y += h;
+      }
+      rect.x += bandW;
+      rect.w -= bandW;
+    } else {
+      // 高矩形 → 沿短边(宽)切一条水平带，带内自左向右排列
+      const bandH = Math.min(rect.h, rowArea / rect.w);
+      let x = rect.x;
+      for (let i = 0; i < row.length; i++) {
+        const it = row[i];
+        const isLast = i === row.length - 1;
+        const w = isLast ? rect.x + rect.w - x : (it.weight * scale) / bandH;
+        out.set(it.key, { left: x, top: rect.y, width: w, height: bandH });
+        x += w;
+      }
+      rect.y += bandH;
+      rect.h -= bandH;
+    }
+  }
+
+  return boards.map((b) => ({ ...b, rect: out.get(b.key) ?? { left: 0, top: 0, width: 0, height: 0 } }));
 }
