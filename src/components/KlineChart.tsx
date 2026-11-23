@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { KlineRow, MinuteRow } from '@/domain/types';
 import type { StrategyHit, TradePlan } from '@/domain/strategy';
-import { changeColor, formatPct, formatChange, intradayVolumeColor } from '@/lib/market-colors';
+import { changeColor, formatPct, intradayVolumeColor } from '@/lib/market-colors';
 import { calcMA, calcBOLL, calcMACD, calcKDJ, calcRSI, rangeStats } from '@/lib/indicators';
 import type { MaSeries } from '@/lib/indicators';
 import { fmtNum, fmtVolume } from '@/lib/format';
@@ -479,9 +479,7 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
           <span style={{ fontSize: 18, fontWeight: 700, color: view.intradayHead.color }}>
             {fmtNum(view.intradayHead.price)}
           </span>
-          <span style={{ fontSize: 13, color: view.intradayHead.color }}>
-            {formatChange(view.intradayHead.changeVal)}（{formatPct(view.intradayHead.changePct)}%）
-          </span>
+          {/* 涨跌额/涨跌幅只在头部一处展示；悬停浮标仍保留历史分钟价格 */}
         </div>
       )}
       <svg viewBox={`0 0 ${W} ${H}`} className="kline-svg" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>

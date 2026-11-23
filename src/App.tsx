@@ -31,6 +31,12 @@ export default function App() {
   // 手动重连：按需求 1.5 重试 3 次、间隔 2 秒，失败后保留上次数据并标注
   const [reconnecting, setReconnecting] = useState(false);
   const [retryNote, setRetryNote] = useState<string | null>(null);
+  // 详情页加自选的轻量 toast（3 秒自动消失，可带撤销回调）
+  const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null);
+  const showToast = (text: string, undo?: () => void) => {
+    setToast({ text, undo });
+    window.setTimeout(() => setToast((t) => (t?.text === text ? null : t)), 3000);
+  };
   const reconnect = async () => {
     setReconnecting(true);
     setRetryNote(null);
@@ -257,8 +263,32 @@ export default function App() {
           name={detail.name}
           quote={detailQuote}
           resp={watchQuotes.data}
+          watchList={wl}
+          onToast={showToast}
           onClose={() => setDetail(null)}
         />
+      )}
+
+      {toast && (
+        <div className="app-toast" role="status">
+          <span>{toast.text}</span>
+          {toast.undo && (
+            <button className="link" onClick={() => { toast.undo?.(); setToast(null); }}>
+              撤销
+            </button>
+          )}
+        </div>
+      )}
+
+      {toast && (
+        <div className="app-toast" role="status">
+          <span>{toast.text}</span>
+          {toast.undo && (
+            <button className="link" onClick={() => { toast.undo?.(); setToast(null); }}>
+              撤销
+            </button>
+          )}
+        </div>
       )}
 
       <footer className="footer">

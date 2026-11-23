@@ -80,13 +80,24 @@ export function useWatchList() {
     setItems((prev) =>
       prev.some((i) => i.code === code)
         ? prev
-        : [...prev, { code, fullCode: full, name, addedAt: Date.now() }],
+        // 【2026-11-23】新加入排最前（自选股页整体顺序随之改变）
+    : [{ code, fullCode: full, name, addedAt: Date.now() }, ...prev],
     );
     return { ok: true };
   }, []);
 
   const remove = useCallback((code: string) => {
     setItems((prev) => prev.filter((i) => i.code !== code));
+  }, []);
+
+  /** 撤销删除：把原条目插回原索引，避免撤销后排到末尾 */
+  const restoreAt = useCallback((item: WatchItem, index: number) => {
+    setItems((prev) => {
+      if (prev.some((i) => i.code === item.code)) return prev;
+      const next = prev.slice();
+      next.splice(Math.max(0, Math.min(index, next.length)), 0, item);
+      return next;
+    });
   }, []);
 
   const clear = useCallback(() => setItems([]), []);
@@ -117,5 +128,5 @@ export function useWatchList() {
 
   const fullCodes = useMemo(() => items.map((i) => i.fullCode), [items]);
 
-  return { items, fullCodes, add, remove, clear, exportJson, importJson, storageOk };
+  return { items, fullCodes, add, remove, restoreAt, clear, exportJson, importJson, storageOk };
 }

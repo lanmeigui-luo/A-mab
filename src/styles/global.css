@@ -431,6 +431,10 @@ body {
 .drawer-head h2 {
   margin: 0;
   font-size: 18px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .drawer-head .price {
   font-size: 20px;
@@ -442,6 +446,48 @@ body {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+.drawer-head .price,
+.drawer-head .pct,
+.drawer-head .btn,
+.drawer-head .watch-btn { flex-shrink: 0; }
+.watch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: #6B7280;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.watch-btn.on { color: #D97706; border-color: #F59E0B; background: #FFFBEB; }
+.watch-star { font-size: 15px; line-height: 1; }
+/* 四档降级：优先级 涨跌幅 > 名称 > 代码 > 涨跌额 */
+.dh-w2 .dh-change, .dh-w3 .dh-change { display: none; }
+.dh-w3 .dh-code { display: none; }
+.dh-w2 .watch-label, .dh-w3 .watch-label { display: none; }
+.dh-w2 .watch-btn, .dh-w3 .watch-btn { padding: 4px 6px; }
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #1F2937;
+  color: #F9FAFB;
+  font-size: 13px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.2);
+}
+.app-toast .link { color: #FCD34D; }
 
 .toolbar {
   display: flex;

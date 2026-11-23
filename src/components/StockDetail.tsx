@@ -5,6 +5,7 @@ import { marketApi, type EvalResponse } from '@/services/market';
 import { KlineChart, type SubIndicator } from '@/components/KlineChart';
 import { DeepAnalysis } from '@/components/DeepAnalysis';
 import type { Quote, QuoteResponse, MinuteResponse, KlineResponse } from '@/domain/types';
+import type { useWatchList } from '@/hooks/useWatchList';
 import { changeColor, formatChange, formatPct } from '@/lib/market-colors';
 import { DASH, fmtAmount, fmtNum, fmtVolume } from '@/lib/format';
 import { calcMA, rangeStats } from '@/lib/indicators';
@@ -17,6 +18,9 @@ interface Props {
   name: string;
   quote?: Quote;
   resp: QuoteResponse | null;
+  /** App 的 useWatchList() 实例；详情页绝不自建第二个 hook 实例 */
+  watchList: ReturnType<typeof useWatchList>;
+  onToast: (text: string, undo?: () => void) => void;
   onClose: () => void;
 }
 
@@ -39,7 +43,7 @@ const FQ: { key: 'qfq' | 'hfq' | 'none'; label: string }[] = [
   { key: 'none', label: '不复权' },
 ];
 
-export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
+export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, onClose }: Props) {
   const [period, setPeriod] = useState<PeriodKey>('minute');
   const [fq, setFq] = useState<'qfq' | 'hfq' | 'none'>('qfq');
   const [showMa, setShowMa] = useState(true);
@@ -190,7 +194,7 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
       }
       if (stats) {
         lines.push(
-          `区间统计：${stats.days} 根，涨跌 ${stats.changePct?.toFixed(2)}%，最高 ${stats.high}，最低 ${stats.low}`,
+          `区间统计：${stats.days} 根，最高 ${stats.high}，最低 ${stats.low}`,
         );
       }
     }
@@ -232,26 +236,54 @@ export function StockDetail({ fullCode, name, quote, resp, onClose }: Props) {
     return closed > 0 ? { rate: wins / closed, closed } : null;
   }, [stockStats]);
 
+  // 【自选状态】单一数据源：App 传入的 watchList，详情页不存副本
+  const watched = watchList.fullCodes.includes(fullCode);
+  const watchIndex = watchList.items.findIndex((i) => i.fullCode === fullCode);
+  // 四档宽度降级：用面板宽度 state，优先级 涨跌幅 > 名称 > 代码 > 涨跌额
+  const headClass = width >= 560 ? 'dh-w0' : width >= 440 ? 'dh-w1' : width >= 380 ? 'dh-w2' : 'dh-w3';
+  const onToggleWatch = () => {
+    const code = fullCode.slice(2);
+    if (!watchList.storageOk) { onToast('本地存储不可用，未保存'); return; }
+    if (watched) {
+      const item = watchList.items[watchIndex];
+      watchList.remove(code);
+      onToast('已移出自选 · 撤销', item ? () => watchList.restoreAt(item, watchIndex) : undefined);
+    } else {
+      const r = watchList.add(code, liveQuote?.name ?? name);
+      if (!r.ok) { onToast(r.reason ?? '加入失败'); return; }
+      onToast('已加入自选');
+    }
+  };
+
   return (
     <aside className="detail-panel" style={{ width }}>
       <div className="detail-resize" onMouseDown={startResize} title="拖拽调整宽度" />
-      <header className="drawer-head">
-        <h2>{quote?.name ?? name}</h2>
-        <span className="mono muted">{fullCode}</span>
+      <header className={`drawer-head ${headClass}`}>
+        <h2 title={liveQuote?.name ?? name}>{liveQuote?.name ?? name}</h2>
+        <span className="mono muted dh-code">{fullCode}</span>
         <span className="price" style={{ color }}>
           {fmtNum(liveQuote?.price ?? null)}
         </span>
         <span className="pct" style={{ color }} title={effectivePrevClose == null ? '无基准价' : undefined}>
           {effectiveChange ? formatPct(effectiveChange.changePct) + '%' : (liveQuote ? '无基准价' : DASH)}
         </span>
-        <span className="pct" style={{ color }}>
+        <span className="pct dh-change" style={{ color }}>
           {effectiveChange ? formatChange(effectiveChange.change) : DASH}
         </span>
         <span className="spacer" />
+        <button
+          className={`watch-btn ${watched ? 'on' : ''}`}
+          onClick={onToggleWatch}
+          title={watched ? '取消自选' : '加入自选'}
+          aria-label={watched ? `取消自选 ${fullCode}` : `加入自选 ${fullCode}`}
+        >
+          <span className="watch-star" aria-hidden="true">{watched ? '★' : '☆'}</span>
+          <span className="watch-label">{watched ? '已自选' : '加自选'}</span>
+        </button>
         <button className="btn" onClick={onClose}>
           收起
         </button>
-      </header>
+        </header>
 
         <div className="toolbar">
           <div className="seg">

@@ -2666,6 +2666,34 @@ function runShapeAssertion() {
   }
 }
 
+function runWatchButtonAssertion() {
+  section('自选按钮 W1：单一数据源与幂等');
+  {
+    const app = fs.readFileSync('src/App.tsx', 'utf8');
+    const detail = fs.readFileSync('src/components/StockDetail.tsx', 'utf8');
+    const hook = fs.readFileSync('src/hooks/useWatchList.ts', 'utf8');
+    check(!detail.includes('= useWatchList()') && detail.includes('import type { useWatchList }'), '详情页只做类型导入，不自建 hook 实例');
+    check(app.includes('watchList={wl}'), 'App 传入同一 useWatchList 实例');
+    check(detail.includes('watchList.fullCodes.includes(fullCode)'), '状态从 fullCodes 派生');
+    check(detail.includes('watchList.restoreAt(item, watchIndex)'), '撤销恢复原索引');
+    check(hook.includes('[{ code, fullCode: full, name, addedAt: Date.now() }, ...prev]'), '新加入排最前');
+    check(hook.includes('prev.some((i) => i.code === code)'), '按 code 去重幂等');
+    check(detail.includes("onToast('本地存储不可用，未保存')"), 'storageOk=false 不静默失败');
+  }
+  section('自选按钮 W2：四档布局与价格口径');
+  {
+    const detail = fs.readFileSync('src/components/StockDetail.tsx', 'utf8');
+    const css = fs.readFileSync('src/styles/global.css', 'utf8');
+    const chart = fs.readFileSync('src/components/KlineChart.tsx', 'utf8');
+    check(detail.includes("width >= 560 ? 'dh-w0' : width >= 440 ? 'dh-w1' : width >= 380 ? 'dh-w2' : 'dh-w3'"), '面板宽度切四档');
+    check(css.includes('min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;'), '名称 min-width:0 + ellipsis');
+    check(css.includes('.drawer-head .price,\n.drawer-head .pct,\n.drawer-head .btn,\n.drawer-head .watch-btn { flex-shrink: 0; }'), '价格/按钮不收缩');
+    check(css.includes('.dh-w2 .watch-label, .dh-w3 .watch-label { display: none; }'), '窄宽度仅星标');
+    check(detail.includes('aria-label={watched ?'), '星标保留 aria-label');
+    check(!chart.includes('formatChange(view.intradayHead.changeVal)'), '图表浮标不再重复涨跌');
+    check(!detail.includes('区间统计：') || !detail.includes('根，涨跌'), '区间统计不再重复涨跌');
+  }
+}
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2707,6 +2735,7 @@ async function main() {
   runCloseout2Assertion();
   runAdaptiveAssertion();
   runShapeAssertion();
+  runWatchButtonAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);
