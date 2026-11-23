@@ -380,6 +380,8 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, o
             rows={isIntraday ? [] : visibleRows}
             precomputedMa={isIntraday ? null : precomputedMa}
             intraday={isIntraday ? (minute.data?.rows ?? []) : null}
+          headerPrice={liveQuote?.price ?? null}
+          headerChangePct={effectiveChange?.changePct ?? null}
             prevClose={effectivePrevClose}
             showMa={showMa}
             showBoll={showBoll}

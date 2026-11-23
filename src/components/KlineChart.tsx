@@ -5,6 +5,7 @@ import { changeColor, formatPct, intradayVolumeColor } from '@/lib/market-colors
 import { calcMA, calcBOLL, calcMACD, calcKDJ, calcRSI, rangeStats } from '@/lib/indicators';
 import type { MaSeries } from '@/lib/indicators';
 import { fmtNum, fmtVolume } from '@/lib/format';
+import { formatStatsLine } from '@/lib/kline-stats-line';
 
 export type SubIndicator = 'vol' | 'macd' | 'kdj' | 'rsi';
 
@@ -30,6 +31,9 @@ interface Props {
   plan?: TradePlan | null;
   /** 命中战法信号 */
   signals?: StrategyHit[];
+  /** 头部正在显示的现价与涨跌幅；分时底部统计必须与之同源 */
+  headerPrice?: number | null;
+  headerChangePct?: number | null;
 }
 
 const W = 900;
@@ -90,7 +94,7 @@ const PLAN_COLORS = {
 /** 分时均价线配色 */
 const AVG_COLOR = '#f59e0b';
 
-export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp, prevClose = null, showMa = true, showBoll = false, sub = 'vol', plan = null, signals = [] }: Props) {
+export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp, prevClose = null, showMa = true, showBoll = false, sub = 'vol', plan = null, signals = [], headerChangePct = null }: Props) {
   const [hover, setHover] = useState<number | null>(null);
   const [sigOpen, setSigOpen] = useState(false);
   const intraday = useMemo(() => (intradayProp && intradayProp.length ? intradayProp : null), [intradayProp]);
@@ -474,14 +478,7 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
 
   return (
     <div className="kline-wrap">
-      {view.isIntraday && view.intradayHead && (
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, padding: '2px 6px 0' }}>
-          <span style={{ fontSize: 18, fontWeight: 700, color: view.intradayHead.color }}>
-            {fmtNum(view.intradayHead.price)}
-          </span>
-          {/* 涨跌额/涨跌幅只在头部一处展示；悬停浮标仍保留历史分钟价格 */}
-        </div>
-      )}
+    
       <svg viewBox={`0 0 ${W} ${H}`} className="kline-svg" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
         <rect x="0" y="0" width={W} height={H} fill="#ffffff" />
 
@@ -697,9 +694,17 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
 
       {view.stats && (
         <div className="kline-stats">
-          {view.isIntraday
-            ? `当日 ${view.stats.days} 点 · 涨跌 ${formatPct(view.stats.changePct)}% · 最高 ${fmtNum(view.stats.high)} · 最低 ${fmtNum(view.stats.low)} · 累计量 ${fmtVolume(view.stats.volume)}`
-            : `区间 ${view.stats.days} 根 · 涨跌 ${formatPct(view.stats.changePct)}% · 最高 ${fmtNum(view.stats.high)} · 最低 ${fmtNum(view.stats.low)} · 累计量 ${fmtVolume(view.stats.volume)}`}
+          {formatStatsLine(
+            {
+              days: view.stats.days,
+              changePct: view.stats.changePct,
+              high: view.stats.high,
+              low: view.stats.low,
+              volume: view.stats.volume,
+            },
+            view.isIntraday,
+            headerChangePct,
+          )}
         </div>
       )}
     </div>

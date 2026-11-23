@@ -54,6 +54,7 @@ import {
   primaryMetric,
   secondaryMetric,
 } from '../src/lib/board-heat';
+import { formatStatsLine } from '../src/lib/kline-stats-line';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2694,6 +2695,33 @@ function runWatchButtonAssertion() {
     check(!detail.includes('区间统计：') || !detail.includes('根，涨跌'), '区间统计不再重复涨跌');
   }
 }
+function stripCodeNoise(src: string): string {
+  return src
+    .split('\n')
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .map((l) => l.replace(/'[^']*'/g, "''").replace(/`[^`]*`/g, '``'))
+    .join('\n');
+}
+
+function runStatsLineAssertion() {
+  section('统计文案 S1：分时涨跌取头部口径，不取分钟线');
+  {
+    const s = { days: 240, changePct: 15.59, high: 10.9, low: 10.11, volume: 1280411 };
+    const line = formatStatsLine(s, true, -3.21);
+    check(line.includes('-3.21%'), '分时文案包含头部口径 -3.21%（实际 ' + line + '）');
+    check(!line.includes('15.59'), '分时文案不得包含分钟线 changePct 15.59');
+    const klineLine = formatStatsLine(s, false, -3.21);
+    check(klineLine.includes('15.59'), 'K线模式仍用自身 changePct');
+  }
+  section('统计文案 S2：KlineChart 源码静态检查（先剔注释与字符串）');
+  {
+    const raw = fs.readFileSync('src/components/KlineChart.tsx', 'utf8');
+    const code = stripCodeNoise(raw);
+    check(!code.includes('formatPct(view.stats.changePct)'), '源码不再直拼 view.stats.changePct');
+    check(/formatStatsLine\s*\(/.test(code), '源码调用 formatStatsLine');
+    check(!code.includes('view.intradayHead.price'), 'intradayHead 渲染块已移除');
+  }
+}
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2736,6 +2764,7 @@ async function main() {
   runAdaptiveAssertion();
   runShapeAssertion();
   runWatchButtonAssertion();
+  runStatsLineAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);
