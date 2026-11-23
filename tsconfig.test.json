@@ -35,6 +35,7 @@
     "src/lib/buy-range-label.ts",
     "src/lib/plan-missing.ts",
     "src/lib/board-heat.ts",
+    "src/lib/kline-stats-line.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

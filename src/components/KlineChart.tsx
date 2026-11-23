@@ -252,9 +252,7 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
         low: priceLo,
         volume: vol.reduce((s, v) => s + v, 0),
       };
-      // 图上方实时浮标：当前价 + 相对昨收涨跌（随分时轮询更新，区别于 header 的行情快照）
-      const changeVal = base ? lastPrice - base : 0;
-      const intradayHead = { price: lastPrice, changeVal, changePct, color: priceColor };
+      // 图表区不再显示现价/涨跌幅（统一由头部一处展示），故无浮标字段。
 
       const lastX = lastValidSlot >= 0 ? slotX(lastValidSlot) : PAD_L;
       // slot 仅供 K 线模式 hover 计算复用；分时不再依赖它
@@ -274,7 +272,6 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
         subBottom,
         planLines,
         stats,
-        intradayHead,
         lastX,
         intraday,
         intradayBySlot,
@@ -449,7 +446,6 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
       priceColor: '#000',
       prevCloseY: null,
       volBars: [] as IntradayVolBar[],
-      intradayHead: null,
     };
   }, [rows, precomputedMa, intraday, sub, plan, prevClose, showMa, showBoll]);
 

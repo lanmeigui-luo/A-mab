@@ -2713,11 +2713,23 @@ function runStatsLineAssertion() {
     const klineLine = formatStatsLine(s, false, -3.21);
     check(klineLine.includes('15.59'), 'K线模式仍用自身 changePct');
   }
+  section('统计文案 S3：数量与价格格式与全局一致');
+  {
+    const s = { days: 240, changePct: 15.59, high: 10.9, low: 10.11, volume: 1280411 };
+    const line = formatStatsLine(s, true, 15.48);
+    check(line.includes('万手'), '成交量带「万手」单位（实际 ' + line + '）');
+    check(!line.includes('1280411'), '不得裸输出成交量数字');
+    check(line.includes('10.90') && line.includes('10.11'), 'high/low 保留两位小数');
+    const nil = formatStatsLine({ ...s, volume: null, high: null, low: null }, true, 15.48);
+    check(nil.includes('累计量 —'), '空成交量显示 —');
+    check(nil.includes('最高 —') && nil.includes('最低 —'), '空价格显示 —');
+  }
   section('统计文案 S2：KlineChart 源码静态检查（先剔注释与字符串）');
   {
     const raw = fs.readFileSync('src/components/KlineChart.tsx', 'utf8');
     const code = stripCodeNoise(raw);
-    check(!code.includes('formatPct(view.stats.changePct)'), '源码不再直拼 view.stats.changePct');
+    check(!/formatStatsLine\s*\([\s\S]{0,400}?,\s*view\.stats\.changePct\s*,/.test(code),
+          'formatStatsLine 第三实参不是 view.stats.changePct');
     check(/formatStatsLine\s*\(/.test(code), '源码调用 formatStatsLine');
     check(!code.includes('view.intradayHead.price'), 'intradayHead 渲染块已移除');
   }
