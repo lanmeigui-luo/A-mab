@@ -2799,7 +2799,7 @@ function runNavAssertion() {
     check(!screen.includes('tradeNav') && screen.includes('recordById'), '弹窗记录由 nav 派生非本地 state');
     check(screen.includes('new Map(filteredRecords.map'), '反查 Map 基于 filteredRecords 超集');
     check(css.includes('@media (max-width: 1023px)'), '窄视口降级存在');
-    check(detail.includes('panel-nav-layer') && detail.includes('style={{ right: width + 56 }}'),
+    check(detail.includes('panel-nav-layer') && detail.includes('style={{ right: width + 12 }}'),
           '面板箭头在 aside 外，right 绑定 width state');
     check(detail.includes('<>\n    <aside className="detail-panel"'), 'return 改为 Fragment，箭头非 aside 子元素');
     const cssLayer = css.slice(css.indexOf('.panel-nav-layer'), css.indexOf('.panel-nav {'));
@@ -2808,6 +2808,12 @@ function runNavAssertion() {
     const cssNav = css.slice(css.indexOf('.panel-nav {'), css.indexOf('.panel-nav:hover'));
     check(!cssNav.includes('left: -48px') && !cssNav.includes('top: 118px'),
           'panel-nav 不再用相对面板的 left/top 定位');
+    check(cssNav.includes('width: 46px') && cssNav.includes('height: 46px') && cssNav.includes('font-size: 16px'),
+          '箭头直径46px、字号16px');
+    check(cssNav.includes('border-radius: 50%') && cssNav.includes('opacity: 0.7') && cssNav.includes('z-index: 301'),
+          '圆形/半透明/层级保持不变');
+    const cssLayerNow = css.slice(css.indexOf('.panel-nav-layer'), css.indexOf('.panel-nav {'));
+    check(cssLayerNow.includes('gap: 8px'), '两箭头间距仍为8px');
   }
 }
 // ───────── 入口 ─────────
