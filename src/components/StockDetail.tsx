@@ -15,6 +15,9 @@ import { useWinRateStore } from '@/hooks/useWinRateStore';
 import { computeWinRateStats, filterWinRateRecords } from '@/lib/winrate-stats';
 import { TRADE_VIEW_STATUS_LABELS, tradeViewCategory } from '@/domain/winrate';
 
+// 切股票时清空旧轮询数据；具名常量避免布尔位置歧义（enabled 与 resetOnDepChange 都是 boolean）
+const CLEAR_ON_SWITCH = true;
+
 interface Props {
   fullCode: string;
   name: string;
@@ -91,7 +94,8 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
     () => marketApi.quotes([fullCode]),
     5000,
     [fullCode],
-  true,
+    true,
+    CLEAR_ON_SWITCH,
   );
   const liveQuote = liveQuoteResp.data?.rows?.[0] ?? quote;
   // 昨收基准兜底：日K倒数第二根（不复权），比 quote.prevClose 更可靠；只拉 3 根，开销可忽略。
@@ -112,7 +116,7 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
     15000,
     [fullCode],
     isIntraday,
-    true,
+    CLEAR_ON_SWITCH,
   );
 
   // MA30 需要至少 30 根 K 才有第一个值：若只请求 30 根，MA30 曲线几乎全空。
@@ -127,7 +131,7 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
     isMinute ? 60000 : 30000,
     [fullCode, period, fq, count],
     !isIntraday,
-  true,
+    CLEAR_ON_SWITCH,
   );
 
   const klineDataRows = kline.data?.rows;

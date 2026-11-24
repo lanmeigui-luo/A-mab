@@ -2750,6 +2750,13 @@ function runNavAssertion() {
     const dup = buildNavContext('trade-table', [...items, items[1]], items[1], 'trade-modal');
     check(dup?.items.length === 4, '同一只多条记录不去重');
     check(ownerFor(true) === 'trade-modal' && ownerFor(false) === 'self', 'owner 按入口决定');
+    const mixed = ['600001', 'BAD', '000002'].map((c) => {
+      const full = /^\d{6}$/.test(c) ? (c.startsWith('6') ? 'sh' : 'sz') + c : null;
+      return { fullCode: full, name: c };
+    }).filter((x): x is { fullCode: string; name: string } => x.fullCode != null);
+    const mixedNav = buildNavContext('trade-table', mixed, mixed[0], 'trade-modal');
+    check(mixedNav != null && mixedNav.items.every((i) => i.fullCode !== '' && i.fullCode.length > 2),
+          '混合有效/无效 code：nav.items 不含空串');
   }
   section('翻页导航 N2：接线与归属');
   {
@@ -2760,11 +2767,13 @@ function runNavAssertion() {
     const polling = fs.readFileSync('src/hooks/usePolling.ts','utf8');
     const css = fs.readFileSync('src/styles/global.css','utf8');
     check(app.includes('const navigate = (delta: number)') && app.includes('detail.nav.index'), 'App 持有唯一翻页真源');
-    check(table.includes("buildNavContext('trade-table'") && table.includes('rows.map'), '交易上下文取完整 rows 不是 pageRows');
+    const navCall = table.slice(table.indexOf("buildNavContext('trade-table'"), table.indexOf("buildNavContext('trade-table'") + 260);
+    check(navCall.includes('rows') && !navCall.includes('pageRows'), '交易上下文取完整 rows 不是 pageRows');
     check(modal.includes("nav && nav.owner === 'trade-modal'"), '弹窗只在 owner=trade-modal 显示箭头');
     check(detail.includes("nav && nav.owner === 'self'"), 'K线只在 owner=self 显示箭头');
     check(!modal.includes('position: fixed') && css.includes('position: absolute;') && css.includes('.nav-arrow'), '箭头 absolute 非 fixed');
-    check(polling.includes('resetOnDepChange') && (detail.split('true,').length - 1) === 3, '三处轮询开启 resetOnDepChange');
+    check((detail.split('    CLEAR_ON_SWITCH,').length - 1) === 3, 'CLEAR_ON_SWITCH 第5实参恰好3次（非布尔计数）');
+    check(polling.includes('resetOnDepChange = false'), 'resetOnDepChange 默认false保持兼容');
   }
 }
 // ───────── 入口 ─────────
