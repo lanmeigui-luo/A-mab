@@ -9,6 +9,7 @@ import { isWithinTradingHours } from '../lib/tradingTime';
 import { WinRateOverviewCard } from './WinRateOverviewCard';
 import { WinRateTradeTable } from './WinRateTradeTable';
 import { WinRateTradeDetailModal } from './WinRateTradeDetailModal';
+import type { NavContext } from '@/domain/nav-context';
 import { EquityCurveChart } from './charts/EquityCurveChart';
 import { HoldDaysWinRateChart } from './charts/HoldDaysWinRateChart';
 import { SellReasonDistributionChart } from './charts/SellReasonDistributionChart';
@@ -76,9 +77,11 @@ class WinRateErrorBoundary extends Component<{ children: ReactNode }, { error: E
 function WinRateScreenInner({
   onOpenKline,
   onCloseKline,
+  onNavigateKline,
 }: {
-  onOpenKline?: (fullCode: string, name: string) => void;
+  onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null) => void;
   onCloseKline?: () => void;
+  onNavigateKline?: (delta: number) => void;
 }) {
   const { records, storageOk } = useWinRateStore();
   const enabled = useMemo(() => listEnabledStrategies(), []);
@@ -90,6 +93,7 @@ function WinRateScreenInner({
   // 旧默认值 'intraday_late' 会让这些记录在明细表里完全不可见（口径隔离提示见概览卡）。
   const [src, setSrc] = useState<SrcFilter>('all');
   const [selectedRecord, setSelectedRecord] = useState<WinRateRecord | null>(null);
+  const [tradeNav, setTradeNav] = useState<NavContext | null>(null);
 
   const filter: WinRateFilter = useMemo(() => {
     const tr = TIME_RANGES.find((t) => t.v === timeRange)!;
@@ -337,7 +341,7 @@ function WinRateScreenInner({
           </div>
 
           {/* 交易明细表 */}
-          <WinRateTradeTable records={filteredRecords} onSelect={setSelectedRecord} />
+          <WinRateTradeTable records={filteredRecords} onSelect={(r, nav) => { setSelectedRecord(r); setTradeNav(nav); }} />
 
           {/* P4 图表层（全自绘 SVG，按数据来源口径隔离） */}
           <div className="panel">
@@ -378,6 +382,8 @@ function WinRateScreenInner({
           setSelectedRecord(null);
           onCloseKline?.();
         }}
+        nav={tradeNav}
+        onNavigate={(delta: number) => onNavigateKline?.(delta)}
         onOpenKline={onOpenKline}
       />
     </div>
@@ -387,13 +393,15 @@ function WinRateScreenInner({
 export function WinRateScreen({
   onOpenKline,
   onCloseKline,
+  onNavigateKline,
 }: {
-  onOpenKline?: (fullCode: string, name: string) => void;
+  onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null) => void;
   onCloseKline?: () => void;
+  onNavigateKline?: (delta: number) => void;
 }) {
   return (
     <WinRateErrorBoundary>
-      <WinRateScreenInner onOpenKline={onOpenKline} onCloseKline={onCloseKline} />
+      <WinRateScreenInner onOpenKline={onOpenKline} onCloseKline={onCloseKline} onNavigateKline={onNavigateKline} />
     </WinRateErrorBoundary>
   );
 }

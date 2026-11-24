@@ -6,6 +6,8 @@ import { KlineChart, type SubIndicator } from '@/components/KlineChart';
 import { DeepAnalysis } from '@/components/DeepAnalysis';
 import type { Quote, QuoteResponse, MinuteResponse, KlineResponse } from '@/domain/types';
 import type { useWatchList } from '@/hooks/useWatchList';
+import type { NavContext } from '@/domain/nav-context';
+import { canPrev, canNext } from '@/domain/nav-context';
 import { changeColor, formatChange, formatPct } from '@/lib/market-colors';
 import { DASH, fmtAmount, fmtNum, fmtVolume } from '@/lib/format';
 import { calcMA, rangeStats } from '@/lib/indicators';
@@ -21,6 +23,8 @@ interface Props {
   /** App 的 useWatchList() 实例；详情页绝不自建第二个 hook 实例 */
   watchList: ReturnType<typeof useWatchList>;
   onToast: (text: string, undo?: () => void) => void;
+  nav?: NavContext | null;
+  onNavigate?: (delta: number) => void;
   onClose: () => void;
 }
 
@@ -43,7 +47,7 @@ const FQ: { key: 'qfq' | 'hfq' | 'none'; label: string }[] = [
   { key: 'none', label: '不复权' },
 ];
 
-export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, onClose }: Props) {
+export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, nav, onNavigate, onClose }: Props) {
   const [period, setPeriod] = useState<PeriodKey>('minute');
   const [fq, setFq] = useState<'qfq' | 'hfq' | 'none'>('qfq');
   const [showMa, setShowMa] = useState(true);
@@ -87,6 +91,7 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, o
     () => marketApi.quotes([fullCode]),
     5000,
     [fullCode],
+  true,
   );
   const liveQuote = liveQuoteResp.data?.rows?.[0] ?? quote;
   // 昨收基准兜底：日K倒数第二根（不复权），比 quote.prevClose 更可靠；只拉 3 根，开销可忽略。
@@ -107,6 +112,7 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, o
     15000,
     [fullCode],
     isIntraday,
+    true,
   );
 
   // MA30 需要至少 30 根 K 才有第一个值：若只请求 30 根，MA30 曲线几乎全空。
@@ -121,6 +127,7 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, o
     isMinute ? 60000 : 30000,
     [fullCode, period, fq, count],
     !isIntraday,
+  true,
   );
 
   const klineDataRows = kline.data?.rows;
@@ -257,6 +264,14 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, o
 
   return (
     <aside className="detail-panel" style={{ width }}>
+      {nav && nav.owner === 'self' && (
+        <>
+          <button className="panel-nav panel-prev" onClick={() => onNavigate?.(-1)}
+                  disabled={!canPrev(nav)} title="上一只" aria-label="上一只">◀</button>
+          <button className="panel-nav panel-next" onClick={() => onNavigate?.(1)}
+                  disabled={!canNext(nav)} title="下一只" aria-label="下一只">▶</button>
+        </>
+      )}
       <div className="detail-resize" onMouseDown={startResize} title="拖拽调整宽度" />
       <header className={`drawer-head ${headClass}`}>
         <h2 title={liveQuote?.name ?? name}>{liveQuote?.name ?? name}</h2>

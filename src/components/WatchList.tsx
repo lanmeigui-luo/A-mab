@@ -1,3 +1,4 @@
+import { buildNavContext, type NavContext } from '@/domain/nav-context';
 import { useMemo, useState } from 'react';
 import type { Quote, QuoteResponse } from '@/domain/types';
 import { changeColor, formatChange, formatPct } from '@/lib/market-colors';
@@ -10,7 +11,7 @@ interface Props {
   error: string | null;
   onAdd: (code: string) => { ok: boolean; reason?: string };
   onRemove: (code: string) => void;
-  onOpenKline: (fullCode: string, name: string) => void;
+  onOpenKline: (fullCode: string, name: string, nav?: NavContext | null) => void;
   storageOk: boolean;
 }
 
@@ -141,7 +142,10 @@ export function WatchList({ items, resp, error, onAdd, onRemove, onOpenKline, st
                     <td>
                       <button
                         className="link"
-                        onClick={() => onOpenKline(item.fullCode, quote?.name ?? item.name ?? item.code)}
+                        onClick={() => onOpenKline(item.fullCode, quote?.name ?? item.name ?? item.code,
+                          buildNavContext('watchlist', rows.map((r) => ({
+                            fullCode: r.item.fullCode, name: r.quote?.name ?? r.item.name ?? r.item.code,
+                          })), { fullCode: item.fullCode, name: quote?.name ?? item.name ?? item.code }, 'self'))}
                       >
                         K线
                       </button>

@@ -488,6 +488,44 @@ body {
   box-shadow: 0 6px 20px rgba(0,0,0,.2);
 }
 .app-toast .link { color: #FCD34D; }
+/* 翻页箭头：容器子元素，absolute 挂容器外侧，随容器出现/消失/伸缩 */
+.nav-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid #D1D5DB;
+  background: rgba(255, 255, 255, 0.92);
+  color: #374151;
+  font-size: 15px;
+  cursor: pointer;
+  z-index: 201;
+  opacity: 0.75;
+}
+.nav-arrow:hover:not(:disabled) { opacity: 1; }
+.nav-arrow:disabled { opacity: 0.3; cursor: default; }
+.nav-prev { left: -52px; }
+.nav-next { right: -52px; }
+.panel-nav {
+  position: absolute;
+  left: -48px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid #D1D5DB;
+  background: rgba(255, 255, 255, 0.8);
+  color: #374151;
+  font-size: 13px;
+  cursor: pointer;
+  z-index: 301;
+  opacity: 0.7;
+}
+.panel-nav:hover:not(:disabled) { opacity: 1; }
+.panel-nav:disabled { opacity: 0.28; cursor: default; }
+.panel-prev { top: 118px; }
+.panel-next { top: 168px; }
 
 .toolbar {
   display: flex;

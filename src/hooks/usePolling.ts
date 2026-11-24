@@ -20,6 +20,8 @@ export function usePolling<T>(
   intervalMs: number,
   deps: unknown[] = [],
   enabled = true,
+  /** 依赖变化时清空旧 data，避免「旧数据配新 key」的错配窗口；默认 false 不影响现有调用点 */
+  resetOnDepChange = false,
 ): PollingState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +56,8 @@ export function usePolling<T>(
 
   useEffect(() => {
     alive.current = true;
+    // 依赖变化时先清旧数据（首次挂载 data 本就是 null，等价于 no-op）
+    if (resetOnDepChange) setData(null);
     // enabled=false：暂停轮询（如分时模式下不空轮询日K），保留已有数据
     if (!enabled) {
       setLoading(false);
@@ -81,7 +85,7 @@ export function usePolling<T>(
       document.removeEventListener('visibilitychange', onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ms, run, enabled, ...deps]);
+  }, [ms, run, enabled, resetOnDepChange, ...deps]);
 
   const setIntervalMs = useCallback((v: number) => setMs(v), []);
 

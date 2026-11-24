@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { buildNavContext, type NavContext } from '@/domain/nav-context';
 import type { WinRateRecord } from '../domain/winrate';
 import {
   SELL_REASON_LABELS,
@@ -31,7 +32,7 @@ interface Props {
   /** 已按页面筛选（战法/时间/来源/持有周期）过滤后的记录 */
   records: WinRateRecord[];
   /** 行点击：打开单笔详情弹层（P5b） */
-  onSelect?: (record: WinRateRecord) => void;
+  onSelect?: (record: WinRateRecord, nav: NavContext | null) => void;
 }
 
 const STATUS_FILTERS: { v: StatusFilter; l: string }[] = [
@@ -305,7 +306,9 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                   <tr
                     key={r.id}
                     className={onSelect ? 'wr-row-click' : undefined}
-                    onClick={onSelect ? () => onSelect(r) : undefined}
+                    onClick={onSelect ? () => onSelect(r, buildNavContext('trade-table',
+                      rows.map((x) => ({ fullCode: toFullCode(x.code) ?? '', name: x.name ?? x.code })),
+                      { fullCode: toFullCode(r.code) ?? '', name: r.name ?? r.code }, 'trade-modal')) : undefined}
                     title={onSelect ? '点击查看交易详情' : undefined}
                   >
                     {/* 实际动作发生日（见 actionDate）；悬停 title 始终给出记录日，便于复盘核对选股日 */}

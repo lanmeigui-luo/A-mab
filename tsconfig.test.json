@@ -36,6 +36,7 @@
     "src/lib/plan-missing.ts",
     "src/lib/board-heat.ts",
     "src/lib/kline-stats-line.ts",
+    "src/domain/nav-context.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }

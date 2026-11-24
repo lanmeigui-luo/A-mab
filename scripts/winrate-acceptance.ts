@@ -55,6 +55,7 @@ import {
   secondaryMetric,
 } from '../src/lib/board-heat';
 import { formatStatsLine } from '../src/lib/kline-stats-line';
+import { buildNavContext, stepNav, canPrev, canNext, currentItem, ownerFor } from '../src/domain/nav-context';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
@@ -2734,6 +2735,38 @@ function runStatsLineAssertion() {
     check(!code.includes('view.intradayHead.price'), 'intradayHead 渲染块已移除');
   }
 }
+function runNavAssertion() {
+  section('翻页导航 N1：上下文与边界');
+  {
+    const items = [{ fullCode: 'sh600001', name: 'A' }, { fullCode: 'sz000002', name: 'B' }, { fullCode: 'sz000003', name: 'C' }];
+    const nav = buildNavContext('trade-table', items, items[1], 'trade-modal');
+    check(nav != null && nav.index === 1, '构造快照定位到第2行');
+    check(nav?.items.length === 3 && nav.items[0].fullCode === 'sh600001', '快照保存完整顺序');
+    check(canPrev(nav) && canNext(nav), '中间行双向可翻');
+    check(canPrev({ ...nav!, index: 0 }) === false, '首行左置灰');
+    check(canNext({ ...nav!, index: 2 }) === false, '末行右置灰');
+    check(stepNav(nav!, -1)?.index === 0 && stepNav(nav!, 1)?.index === 2, '上/下翻页索引正确');
+    check(stepNav({ ...nav!, index: 0 }, -1) === null, '越界不循环');
+    const dup = buildNavContext('trade-table', [...items, items[1]], items[1], 'trade-modal');
+    check(dup?.items.length === 4, '同一只多条记录不去重');
+    check(ownerFor(true) === 'trade-modal' && ownerFor(false) === 'self', 'owner 按入口决定');
+  }
+  section('翻页导航 N2：接线与归属');
+  {
+    const app = fs.readFileSync('src/App.tsx','utf8');
+    const modal = fs.readFileSync('src/components/WinRateTradeDetailModal.tsx','utf8');
+    const detail = fs.readFileSync('src/components/StockDetail.tsx','utf8');
+    const table = fs.readFileSync('src/components/WinRateTradeTable.tsx','utf8');
+    const polling = fs.readFileSync('src/hooks/usePolling.ts','utf8');
+    const css = fs.readFileSync('src/styles/global.css','utf8');
+    check(app.includes('const navigate = (delta: number)') && app.includes('detail.nav.index'), 'App 持有唯一翻页真源');
+    check(table.includes("buildNavContext('trade-table'") && table.includes('rows.map'), '交易上下文取完整 rows 不是 pageRows');
+    check(modal.includes("nav && nav.owner === 'trade-modal'"), '弹窗只在 owner=trade-modal 显示箭头');
+    check(detail.includes("nav && nav.owner === 'self'"), 'K线只在 owner=self 显示箭头');
+    check(!modal.includes('position: fixed') && css.includes('position: absolute;') && css.includes('.nav-arrow'), '箭头 absolute 非 fixed');
+    check(polling.includes('resetOnDepChange') && (detail.split('true,').length - 1) === 3, '三处轮询开启 resetOnDepChange');
+  }
+}
 // ───────── 入口 ─────────
 async function main() {
   console.log('战法胜率 v2-t1-fix 增量修复 · 离线验收');
@@ -2777,6 +2810,7 @@ async function main() {
   runShapeAssertion();
   runWatchButtonAssertion();
   runStatsLineAssertion();
+  runNavAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

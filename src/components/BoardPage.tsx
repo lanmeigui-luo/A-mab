@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardConsResponse, BoardRow, BoardStock, BoardType } from '@/domain/board';
 import { BOARD_TYPES } from '@/domain/board';
 import { marketApi } from '@/services/market';
+import { buildNavContext, type NavContext } from '@/domain/nav-context';
 import { changeColor, formatPct } from '@/lib/market-colors';
 import {
   heatColor,
@@ -41,7 +42,7 @@ function BoardDetail({
 }: {
   board: BoardRow;
   onClose: () => void;
-  onOpenKline: (fullCode: string, name: string) => void;
+  onOpenKline: (fullCode: string, name: string, nav?: NavContext | null) => void;
 }) {
   const [resp, setResp] = useState<BoardConsResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -180,7 +181,9 @@ function BoardDetail({
                           {s.floatMvWan != null ? (s.floatMvWan / 10000).toFixed(2) + ' 亿' : DASH}
                         </td>
                         <td>
-                          <button className="link" onClick={() => onOpenKline(s.fullCode, s.name)}>
+                          <button className="link" onClick={() => onOpenKline(s.fullCode, s.name, buildNavContext('board-cons',
+                              rows.map((x) => ({ fullCode: x.fullCode, name: x.name })),
+                              { fullCode: s.fullCode, name: s.name }, 'self'))}>
                             K线
                           </button>
                         </td>

@@ -3,6 +3,7 @@ import { SourceStatusBar } from '@/components/SourceStatusBar';
 import { MarketOverview } from '@/components/MarketOverview';
 import { WatchList } from '@/components/WatchList';
 import { StockDetail } from '@/components/StockDetail';
+import type { NavContext } from '@/domain/nav-context';
 import { StrategyScreen } from '@/components/StrategyScreen';
 import { BoardPage } from '@/components/BoardPage';
 import { CapabilityMatrix } from '@/components/CapabilityMatrix';
@@ -76,7 +77,17 @@ export default function App() {
   useEffect(() => {
     recorder.runDailyCycle().catch(() => undefined);
   }, [recorder.runDailyCycle]);
-  const [detail, setDetail] = useState<{ fullCode: string; name: string } | null>(null);
+  const [detail, setDetail] = useState<{ fullCode: string; name: string; nav: NavContext | null } | null>(null);
+  // 翻页唯一真源：detail.nav.index；弹窗与 K 线都调用它
+  const navigate = (delta: number) => {
+    setDetail((d) => {
+      if (!d?.nav) return d;
+      const next = d.nav.index + delta;
+      if (next < 0 || next >= d.nav.items.length) return d;
+      const item = d.nav.items[next];
+      return { ...d, fullCode: item.fullCode, name: item.name, nav: { ...d.nav, index: next } };
+    });
+  };
 
   const watchQuotes = usePolling(
     () => (wl.fullCodes.length ? marketApi.quotes(wl.fullCodes) : Promise.resolve(null)),
@@ -167,7 +178,7 @@ export default function App() {
           stats={stats.data}
           sentiment={sentiment.data}
           turnover={turnover.data}
-          onOpenIndex={(fullCode, name) => setDetail({ fullCode, name })}
+          onOpenIndex={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
         />
 
         <nav className="tabs">
@@ -206,7 +217,7 @@ export default function App() {
             error={watchQuotes.error}
             onAdd={wl.add}
             onRemove={wl.remove}
-            onOpenKline={(fullCode, name) => setDetail({ fullCode, name })}
+            onOpenKline={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
             storageOk={wl.storageOk}
           />
         ) : tab === 'strategy' ? (
@@ -228,7 +239,7 @@ export default function App() {
             params={sp.params}
             onParamChange={sp.setParam}
             onResetParams={sp.resetStrategy}
-            onAnalyze={(fullCode, name) => setDetail({ fullCode, name })}
+            onAnalyze={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
           />
         ) : tab === 'board' ? (
           <BoardPage
@@ -239,12 +250,13 @@ export default function App() {
             onType={setBoardType}
             elapsedMs={boards.data?.elapsedMs}
             source="AkShare（新浪板块）"
-            onOpenKline={(fullCode, name) => setDetail({ fullCode, name })}
+            onOpenKline={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
           />
         ) : tab === 'winrate' ? (
           <WinRateScreen
-            onOpenKline={(fullCode, name) => setDetail({ fullCode, name })}
+            onOpenKline={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
             onCloseKline={() => setDetail(null)}
+            onNavigateKline={navigate}
           />
         ) : (
           <CapabilityMatrix />
@@ -265,6 +277,7 @@ export default function App() {
           resp={watchQuotes.data}
           watchList={wl}
           onToast={showToast}
+          onNavigate={navigate}
           onClose={() => setDetail(null)}
         />
       )}
