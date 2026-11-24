@@ -2797,6 +2797,15 @@ function runNavAssertion() {
     check(!screen.includes('tradeNav') && screen.includes('recordById'), '弹窗记录由 nav 派生非本地 state');
     check(screen.includes('new Map(filteredRecords.map'), '反查 Map 基于 filteredRecords 超集');
     check(css.includes('@media (max-width: 1023px)'), '窄视口降级存在');
+    check(detail.includes('panel-nav-layer') && detail.includes('style={{ right: width + 56 }}'),
+          '面板箭头在 aside 外，right 绑定 width state');
+    check(detail.includes('<>\n    <aside className="detail-panel"'), 'return 改为 Fragment，箭头非 aside 子元素');
+    const cssLayer = css.slice(css.indexOf('.panel-nav-layer'), css.indexOf('.panel-nav {'));
+    check(cssLayer.includes('position: fixed') && cssLayer.includes('flex-direction: column'),
+          '箭头层 fixed + 纵向排列');
+    const cssNav = css.slice(css.indexOf('.panel-nav {'), css.indexOf('.panel-nav:hover'));
+    check(!cssNav.includes('left: -48px') && !cssNav.includes('top: 118px'),
+          'panel-nav 不再用相对面板的 left/top 定位');
   }
 }
 // ───────── 入口 ─────────

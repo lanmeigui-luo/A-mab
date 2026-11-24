@@ -267,15 +267,8 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
   };
 
   return (
+    <>
     <aside className="detail-panel" style={{ width }}>
-      {nav && nav.owner === 'self' && (
-        <>
-          <button className="panel-nav panel-prev" onClick={() => onNavigate?.(-1)}
-                  disabled={!canPrev(nav)} title="上一只" aria-label="上一只">◀</button>
-          <button className="panel-nav panel-next" onClick={() => onNavigate?.(1)}
-                  disabled={!canNext(nav)} title="下一只" aria-label="下一只">▶</button>
-        </>
-      )}
       <div className="detail-resize" onMouseDown={startResize} title="拖拽调整宽度" />
       <header className={`drawer-head ${headClass}`}>
         <h2 title={liveQuote?.name ?? name}>{liveQuote?.name ?? name}</h2>
@@ -626,5 +619,14 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
         />
       )}
     </aside>
+    {nav && nav.owner === 'self' && (
+      <div className="panel-nav-layer" style={{ right: width + 56 }}>
+        <button className="panel-nav panel-prev" onClick={() => onNavigate?.(-1)}
+                disabled={!canPrev(nav)} title="上一只" aria-label="上一只">◀</button>
+        <button className="panel-nav panel-next" onClick={() => onNavigate?.(1)}
+                disabled={!canNext(nav)} title="下一只" aria-label="下一只">▶</button>
+      </div>
+    )}
+    </>
   );
 }

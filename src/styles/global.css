@@ -508,9 +508,18 @@ body {
 .nav-arrow:disabled { opacity: 0.3; cursor: default; }
 .nav-prev { left: -52px; }
 .nav-next { right: -52px; }
+/* 面板箭头层：fixed 定位但 right 由面板 width state 驱动，随伸缩移动、随组件卸载消失。
+   .detail-panel 有 overflow-y:auto（另一轴 visible 会被算成 auto），箭头必须放在 aside 外，否则被裁。 */
+.panel-nav-layer {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 301;
+}
 .panel-nav {
-  position: absolute;
-  left: -48px;
   width: 38px;
   height: 38px;
   border-radius: 50%;
@@ -524,8 +533,6 @@ body {
 }
 .panel-nav:hover:not(:disabled) { opacity: 1; }
 .panel-nav:disabled { opacity: 0.28; cursor: default; }
-.panel-prev { top: 118px; }
-.panel-next { top: 168px; }
 /* 视口 <1024 时对话框两侧空白不足 52px：箭头贴对话框内缘，避免出界 */
 @media (max-width: 1023px) {
   .nav-prev { left: 8px; }
