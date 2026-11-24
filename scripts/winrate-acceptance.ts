@@ -2783,7 +2783,9 @@ function runNavAssertion() {
     check(modal.includes("nav && nav.owner === 'trade-modal'"), '弹窗只在 owner=trade-modal 显示箭头');
     check(detail.includes("nav && nav.owner === 'self'"), 'K线只在 owner=self 显示箭头');
     check(!modal.includes('position: fixed') && css.includes('position: absolute;') && css.includes('.nav-arrow'), '箭头 absolute 非 fixed');
-    check((detail.split('    CLEAR_ON_SWITCH,').length - 1) === 3, 'CLEAR_ON_SWITCH 第5实参恰好3次（非布尔计数）');
+    check((detail.split('    CLEAR_ON_SWITCH,').length - 1) === 4, 'CLEAR_ON_SWITCH 第5实参恰好4次（含 baseKline）');
+    const baseBlock = detail.slice(detail.indexOf('const baseKline'), detail.indexOf('const klineRows'));
+    check(baseBlock.includes('CLEAR_ON_SWITCH'), 'baseKline 切票清空旧昨收基准');
     const modalRoot = modal.slice(modal.indexOf('<div className="modal wr-detail-modal"'), modal.indexOf('<div className="modal wr-detail-modal"') + 500);
     check(modalRoot.includes('nav-arrow'), '箭头在对话框根元素内（非 mask）');
     check(modalRoot.includes('e.stopPropagation(); onNavigate'), '箭头阻止冒泡，不会关闭弹窗');

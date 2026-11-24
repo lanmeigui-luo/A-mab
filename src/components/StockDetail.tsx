@@ -103,6 +103,8 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
     () => marketApi.kline(fullCode, 'day', 'none', 3),
     60000,
     [fullCode],
+    true,
+    CLEAR_ON_SWITCH,
   );
   const klineRows = baseKline.data?.rows ?? [];
   const klinePrevClose = klineRows.length >= 2 ? klineRows[klineRows.length - 2]?.close : null;
