@@ -3,6 +3,9 @@ export type NavSource = 'trade-table' | 'watchlist' | 'board-cons';
 export type NavOwner = 'trade-modal' | 'self';
 
 export interface NavItem {
+  /** 行唯一标识：交易明细用记录 id，自选股/成分股用 fullCode。
+   *  同一只票多条交易记录时 fullCode 相同，必须用 id 才能定位到具体第几条。 */
+  id: string;
   fullCode: string;
   name: string;
 }
@@ -16,19 +19,19 @@ export interface NavContext {
   owner: NavOwner;
 }
 
-/** 由入口列表构造快照；record 必须能在 items 中找到 */
+/** 由入口列表构造快照；按 current.id 定位（不是 fullCode，同票多记录需区分） */
 export function buildNavContext(
   source: NavSource,
   rows: NavItem[],
   current: NavItem,
   owner: NavOwner,
 ): NavContext | null {
-  const idx = rows.findIndex((r) => r.fullCode === current.fullCode);
+  const idx = rows.findIndex((r) => r.id === current.id);
   if (idx < 0) return null;
   return {
     id: source + ':' + Date.now() + ':' + idx,
     source,
-    items: rows.map((r) => ({ fullCode: r.fullCode, name: r.name })),
+    items: rows.map((r) => ({ id: r.id, fullCode: r.fullCode, name: r.name })),
     index: idx,
     owner,
   };

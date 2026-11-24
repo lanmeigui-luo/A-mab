@@ -3,13 +3,14 @@ import type { ReactNode, ErrorInfo } from 'react';
 import { useWinRateStore } from '../hooks/useWinRateStore';
 import { computeWinRateStats, filterWinRateRecords, HOLD_DAYS_BUCKETS } from '../lib/winrate-stats';
 import type { WinRateFilter } from '../lib/winrate-stats';
-import type { PriceSource, WinRateRecord } from '../domain/winrate';
+import type { PriceSource } from '../domain/winrate';
 import { listEnabledStrategies } from '../domain/winrate-config';
 import { isWithinTradingHours } from '../lib/tradingTime';
 import { WinRateOverviewCard } from './WinRateOverviewCard';
 import { WinRateTradeTable } from './WinRateTradeTable';
 import { WinRateTradeDetailModal } from './WinRateTradeDetailModal';
 import type { NavContext } from '@/domain/nav-context';
+import { currentItem } from '@/domain/nav-context';
 import { EquityCurveChart } from './charts/EquityCurveChart';
 import { HoldDaysWinRateChart } from './charts/HoldDaysWinRateChart';
 import { SellReasonDistributionChart } from './charts/SellReasonDistributionChart';
@@ -75,13 +76,17 @@ class WinRateErrorBoundary extends Component<{ children: ReactNode }, { error: E
 }
 
 function WinRateScreenInner({
+  nav,
+  onNavChange,
   onOpenKline,
   onCloseKline,
-  onNavigateKline,
+  onNavigate,
 }: {
+  nav?: NavContext | null;
+  onNavChange?: (nav: NavContext | null) => void;
   onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null) => void;
   onCloseKline?: () => void;
-  onNavigateKline?: (delta: number) => void;
+  onNavigate?: (delta: number) => void;
 }) {
   const { records, storageOk } = useWinRateStore();
   const enabled = useMemo(() => listEnabledStrategies(), []);
@@ -92,8 +97,7 @@ function WinRateScreenInner({
   // 默认展示全部来源：收盘快照补拉的记录是 priceSource='close'，
   // 旧默认值 'intraday_late' 会让这些记录在明细表里完全不可见（口径隔离提示见概览卡）。
   const [src, setSrc] = useState<SrcFilter>('all');
-  const [selectedRecord, setSelectedRecord] = useState<WinRateRecord | null>(null);
-  const [tradeNav, setTradeNav] = useState<NavContext | null>(null);
+  // 弹窗记录从 App 的单一 nav 真源派生；selectedRecord 不再是本地 state。
 
   const filter: WinRateFilter = useMemo(() => {
     const tr = TIME_RANGES.find((t) => t.v === timeRange)!;
@@ -108,6 +112,17 @@ function WinRateScreenInner({
 
   const result = useMemo(() => computeWinRateStats(records, filter), [records, filter]);
   const filteredRecords = useMemo(() => filterWinRateRecords(records, filter), [records, filter]);
+
+  // 反查 Map 基于 filteredRecords（超集）：nav.items 来自表格 rows（子集），必须能查到
+  const recordById = useMemo(
+    () => new Map(filteredRecords.map((r) => [r.id, r])),
+    [filteredRecords],
+  );
+  const selectedRecord = useMemo(() => {
+    if (!nav || nav.source !== 'trade-table') return null;
+    const item = currentItem(nav);
+    return item ? recordById.get(item.id) ?? null : null;
+  }, [nav, recordById]);
 
   // P0补充#1：统计页提示分钟线消歧修正笔数（其成交价/收益率由分钟线回填，计入分母，与纯日K口径不同）
   const disambiguationCorrections = useMemo(
@@ -341,7 +356,7 @@ function WinRateScreenInner({
           </div>
 
           {/* 交易明细表 */}
-          <WinRateTradeTable records={filteredRecords} onSelect={(r, nav) => { setSelectedRecord(r); setTradeNav(nav); }} />
+          <WinRateTradeTable records={filteredRecords} onSelect={(_r, nextNav) => onNavChange?.(nextNav)} />
 
           {/* P4 图表层（全自绘 SVG，按数据来源口径隔离） */}
           <div className="panel">
@@ -379,11 +394,11 @@ function WinRateScreenInner({
       <WinRateTradeDetailModal
         record={selectedRecord}
         onClose={() => {
-          setSelectedRecord(null);
+          onNavChange?.(null);
           onCloseKline?.();
         }}
-        nav={tradeNav}
-        onNavigate={(delta: number) => onNavigateKline?.(delta)}
+        nav={nav}
+        onNavigate={(delta: number) => onNavigate?.(delta)}
         onOpenKline={onOpenKline}
       />
     </div>
@@ -391,17 +406,24 @@ function WinRateScreenInner({
 }
 
 export function WinRateScreen({
+  nav,
+  onNavChange,
   onOpenKline,
   onCloseKline,
-  onNavigateKline,
+  onNavigate,
 }: {
+  nav?: NavContext | null;
+  onNavChange?: (nav: NavContext | null) => void;
   onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null) => void;
   onCloseKline?: () => void;
-  onNavigateKline?: (delta: number) => void;
+  onNavigate?: (delta: number) => void;
 }) {
   return (
     <WinRateErrorBoundary>
-      <WinRateScreenInner onOpenKline={onOpenKline} onCloseKline={onCloseKline} onNavigateKline={onNavigateKline} />
+      <WinRateScreenInner
+        nav={nav} onNavChange={onNavChange}
+        onOpenKline={onOpenKline} onCloseKline={onCloseKline} onNavigate={onNavigate}
+      />
     </WinRateErrorBoundary>
   );
 }

@@ -182,8 +182,8 @@ function BoardDetail({
                         </td>
                         <td>
                           <button className="link" onClick={() => onOpenKline(s.fullCode, s.name, buildNavContext('board-cons',
-                              rows.map((x) => ({ fullCode: x.fullCode, name: x.name })),
-                              { fullCode: s.fullCode, name: s.name }, 'self'))}>
+                              rows.map((x) => ({ id: x.fullCode, fullCode: x.fullCode, name: x.name })),
+                              { id: s.fullCode, fullCode: s.fullCode, name: s.name }, 'self'))}>
                             K线
                           </button>
                         </td>

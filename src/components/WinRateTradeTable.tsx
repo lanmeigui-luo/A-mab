@@ -308,9 +308,9 @@ export function WinRateTradeTable({ records, onSelect }: Props) {
                     className={onSelect ? 'wr-row-click' : undefined}
                     onClick={onSelect ? () => onSelect(r, buildNavContext('trade-table',
                       rows
-                          .map((x) => ({ fullCode: toFullCode(x.code), name: x.name ?? x.code }))
-                          .filter((x): x is { fullCode: string; name: string } => x.fullCode != null),
-                      { fullCode: toFullCode(r.code) ?? '', name: r.name ?? r.code }, 'trade-modal')) : undefined}
+                          .map((x) => ({ id: x.id, fullCode: toFullCode(x.code), name: x.name ?? x.code }))
+                          .filter((x): x is { id: string; fullCode: string; name: string } => x.fullCode != null),
+                      { id: r.id, fullCode: toFullCode(r.code) ?? '', name: r.name ?? r.code }, 'trade-modal')) : undefined}
                     title={onSelect ? '点击查看交易详情' : undefined}
                   >
                     {/* 实际动作发生日（见 actionDate）；悬停 title 始终给出记录日，便于复盘核对选股日 */}

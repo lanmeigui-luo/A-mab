@@ -526,6 +526,11 @@ body {
 .panel-nav:disabled { opacity: 0.28; cursor: default; }
 .panel-prev { top: 118px; }
 .panel-next { top: 168px; }
+/* 视口 <1024 时对话框两侧空白不足 52px：箭头贴对话框内缘，避免出界 */
+@media (max-width: 1023px) {
+  .nav-prev { left: 8px; }
+  .nav-next { right: 8px; }
+}
 
 .toolbar {
   display: flex;

@@ -4,6 +4,7 @@ import { MarketOverview } from '@/components/MarketOverview';
 import { WatchList } from '@/components/WatchList';
 import { StockDetail } from '@/components/StockDetail';
 import type { NavContext } from '@/domain/nav-context';
+import { stepNav, currentItem } from '@/domain/nav-context';
 import { StrategyScreen } from '@/components/StrategyScreen';
 import { BoardPage } from '@/components/BoardPage';
 import { CapabilityMatrix } from '@/components/CapabilityMatrix';
@@ -70,23 +71,34 @@ export default function App() {
   const cb = useColorBlind();
 
   // P2b 修复：应用打开即跑一次每日周期（记录/结算）。
-  // 此前该调用点从未落地，导致 winrate Tab 始终 recordsLength=0（仅窗口命中时才可能因别处触发，实际没有任何调用点）。
+  // 此前该调用点从未落地，导致 winrate Tab 始终 recordsLength=0。
   const recorder = useWinRateRecorder();
   // P2c：盘中 1 分钟级实时监控（前端常驻，全局生效，任意页面都跑）
   useIntradayMonitor();
   useEffect(() => {
     recorder.runDailyCycle().catch(() => undefined);
   }, [recorder.runDailyCycle]);
-  const [detail, setDetail] = useState<{ fullCode: string; name: string; nav: NavContext | null } | null>(null);
-  // 翻页唯一真源：detail.nav.index；弹窗与 K 线都调用它
+
+  // 【翻页单一真源】nav 独立持有，不再嵌在 detail 内。
+  // detail 只描述「K 线面板当前显示哪只」；弹窗是否打开由 WinRateScreen 从 nav 派生。
+  // 这样 K 线未打开（detail=null）时，弹窗翻页仍能推进 nav。
+  const [nav, setNav] = useState<NavContext | null>(null);
+  const [detail, setDetail] = useState<{ fullCode: string; name: string } | null>(null);
   const navigate = (delta: number) => {
-    setDetail((d) => {
-      if (!d?.nav) return d;
-      const next = d.nav.index + delta;
-      if (next < 0 || next >= d.nav.items.length) return d;
-      const item = d.nav.items[next];
-      return { ...d, fullCode: item.fullCode, name: item.name, nav: { ...d.nav, index: next } };
+    setNav((prev) => {
+      if (!prev) return prev;
+      const next = stepNav(prev, delta);
+      if (!next) return prev;
+      const item = currentItem(next);
+      // K 线面板开着时同步切到同一条；未开时只推进 nav，弹窗由派生自动跟随。
+      if (item) setDetail((d) => (d ? { fullCode: item.fullCode, name: item.name } : d));
+      return next;
     });
+  };
+  // 各入口打开详情：同时设置 nav 与 detail（nav 可为 null，如大盘指数/战法）
+  const openDetail = (fullCode: string, name: string, nextNav?: NavContext | null) => {
+    setNav(nextNav ?? null);
+    setDetail({ fullCode, name });
   };
 
   const watchQuotes = usePolling(
@@ -178,7 +190,7 @@ export default function App() {
           stats={stats.data}
           sentiment={sentiment.data}
           turnover={turnover.data}
-          onOpenIndex={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
+          onOpenIndex={(fullCode: string, name: string, nextNav?: NavContext | null) => openDetail(fullCode, name, nextNav)}
         />
 
         <nav className="tabs">
@@ -217,7 +229,7 @@ export default function App() {
             error={watchQuotes.error}
             onAdd={wl.add}
             onRemove={wl.remove}
-            onOpenKline={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
+            onOpenKline={(fullCode: string, name: string, nextNav?: NavContext | null) => openDetail(fullCode, name, nextNav)}
             storageOk={wl.storageOk}
           />
         ) : tab === 'strategy' ? (
@@ -239,7 +251,7 @@ export default function App() {
             params={sp.params}
             onParamChange={sp.setParam}
             onResetParams={sp.resetStrategy}
-            onAnalyze={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
+            onAnalyze={(fullCode: string, name: string, nextNav?: NavContext | null) => openDetail(fullCode, name, nextNav)}
           />
         ) : tab === 'board' ? (
           <BoardPage
@@ -250,13 +262,15 @@ export default function App() {
             onType={setBoardType}
             elapsedMs={boards.data?.elapsedMs}
             source="AkShare（新浪板块）"
-            onOpenKline={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
+            onOpenKline={(fullCode: string, name: string, nextNav?: NavContext | null) => openDetail(fullCode, name, nextNav)}
           />
         ) : tab === 'winrate' ? (
           <WinRateScreen
-            onOpenKline={(fullCode: string, name: string, nav?: NavContext | null) => setDetail({ fullCode, name, nav: nav ?? null })}
+            nav={nav}
+            onOpenKline={(fullCode: string, name: string, nextNav?: NavContext | null) => openDetail(fullCode, name, nextNav)}
             onCloseKline={() => setDetail(null)}
-            onNavigateKline={navigate}
+            onNavigate={navigate}
+            onNavChange={setNav}
           />
         ) : (
           <CapabilityMatrix />
@@ -277,20 +291,10 @@ export default function App() {
           resp={watchQuotes.data}
           watchList={wl}
           onToast={showToast}
+          nav={nav}
           onNavigate={navigate}
           onClose={() => setDetail(null)}
         />
-      )}
-
-      {toast && (
-        <div className="app-toast" role="status">
-          <span>{toast.text}</span>
-          {toast.undo && (
-            <button className="link" onClick={() => { toast.undo?.(); setToast(null); }}>
-              撤销
-            </button>
-          )}
-        </div>
       )}
 
       {toast && (

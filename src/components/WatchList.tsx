@@ -144,8 +144,8 @@ export function WatchList({ items, resp, error, onAdd, onRemove, onOpenKline, st
                         className="link"
                         onClick={() => onOpenKline(item.fullCode, quote?.name ?? item.name ?? item.code,
                           buildNavContext('watchlist', rows.map((r) => ({
-                            fullCode: r.item.fullCode, name: r.quote?.name ?? r.item.name ?? r.item.code,
-                          })), { fullCode: item.fullCode, name: quote?.name ?? item.name ?? item.code }, 'self'))}
+                            id: r.item.fullCode, fullCode: r.item.fullCode, name: r.quote?.name ?? r.item.name ?? r.item.code,
+                          })), { id: item.fullCode, fullCode: item.fullCode, name: quote?.name ?? item.name ?? item.code }, 'self'))}
                       >
                         K线
                       </button>

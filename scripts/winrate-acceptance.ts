@@ -2738,7 +2738,11 @@ function runStatsLineAssertion() {
 function runNavAssertion() {
   section('翻页导航 N1：上下文与边界');
   {
-    const items = [{ fullCode: 'sh600001', name: 'A' }, { fullCode: 'sz000002', name: 'B' }, { fullCode: 'sz000003', name: 'C' }];
+    const items = [
+    { id: 'r1', fullCode: 'sh600001', name: 'A' },
+    { id: 'r2', fullCode: 'sz000002', name: 'B' },
+    { id: 'r3', fullCode: 'sz000003', name: 'C' },
+  ];
     const nav = buildNavContext('trade-table', items, items[1], 'trade-modal');
     check(nav != null && nav.index === 1, '构造快照定位到第2行');
     check(nav?.items.length === 3 && nav.items[0].fullCode === 'sh600001', '快照保存完整顺序');
@@ -2750,10 +2754,16 @@ function runNavAssertion() {
     const dup = buildNavContext('trade-table', [...items, items[1]], items[1], 'trade-modal');
     check(dup?.items.length === 4, '同一只多条记录不去重');
     check(ownerFor(true) === 'trade-modal' && ownerFor(false) === 'self', 'owner 按入口决定');
+    const dupCode = [
+      { id: 'r1', fullCode: 'sh600001', name: 'A' },
+      { id: 'r2', fullCode: 'sh600001', name: 'A' },
+    ];
+    const dupNav = buildNavContext('trade-table', dupCode, dupCode[1], 'trade-modal');
+    check(dupNav != null && dupNav.index === 1, '同票两条记录用 id 定位到第2条');
     const mixed = ['600001', 'BAD', '000002'].map((c) => {
       const full = /^\d{6}$/.test(c) ? (c.startsWith('6') ? 'sh' : 'sz') + c : null;
-      return { fullCode: full, name: c };
-    }).filter((x): x is { fullCode: string; name: string } => x.fullCode != null);
+      return { id: full ?? c, fullCode: full, name: c };
+    }).filter((x): x is { id: string; fullCode: string; name: string } => x.fullCode != null);
     const mixedNav = buildNavContext('trade-table', mixed, mixed[0], 'trade-modal');
     check(mixedNav != null && mixedNav.items.every((i) => i.fullCode !== '' && i.fullCode.length > 2),
           '混合有效/无效 code：nav.items 不含空串');
@@ -2764,9 +2774,10 @@ function runNavAssertion() {
     const modal = fs.readFileSync('src/components/WinRateTradeDetailModal.tsx','utf8');
     const detail = fs.readFileSync('src/components/StockDetail.tsx','utf8');
     const table = fs.readFileSync('src/components/WinRateTradeTable.tsx','utf8');
+    const screen = fs.readFileSync('src/components/WinRateScreen.tsx','utf8');
     const polling = fs.readFileSync('src/hooks/usePolling.ts','utf8');
     const css = fs.readFileSync('src/styles/global.css','utf8');
-    check(app.includes('const navigate = (delta: number)') && app.includes('detail.nav.index'), 'App 持有唯一翻页真源');
+    check(app.includes('const navigate = (delta: number)') && app.includes('const [nav, setNav] = useState<NavContext | null>(null)'), 'App 持有唯一翻页真源');
     const navCall = table.slice(table.indexOf("buildNavContext('trade-table'"), table.indexOf("buildNavContext('trade-table'") + 260);
     check(navCall.includes('rows') && !navCall.includes('pageRows'), '交易上下文取完整 rows 不是 pageRows');
     check(modal.includes("nav && nav.owner === 'trade-modal'"), '弹窗只在 owner=trade-modal 显示箭头');
@@ -2780,6 +2791,12 @@ function runNavAssertion() {
     check(cssModal.includes('position: relative') && cssModal.includes('overflow: visible'), '对话框 relative + overflow visible');
     check('箭头在对话框内' === '箭头在对话框内', '箭头在对话框内');
     check(polling.includes('resetOnDepChange = false'), 'resetOnDepChange 默认false保持兼容');
+    const appNav = app.split('const [nav, setNav]')[1] ?? '';
+    check(app.includes('const [nav, setNav] = useState<NavContext | null>(null)'), 'nav 为 App 独立真源');
+    check(app.includes('setNav((prev) => {') && !app.includes('if (!d?.nav) return d'), 'navigate 不依赖 detail 存在');
+    check(!screen.includes('tradeNav') && screen.includes('recordById'), '弹窗记录由 nav 派生非本地 state');
+    check(screen.includes('new Map(filteredRecords.map'), '反查 Map 基于 filteredRecords 超集');
+    check(css.includes('@media (max-width: 1023px)'), '窄视口降级存在');
   }
 }
 // ───────── 入口 ─────────
