@@ -67,12 +67,20 @@ import { useWinRateStore, getLiveRecords, applyMinuteResolution, registerMinuteR
 import { isWithinRecordWindow, isWeekday, MARKET_CLOSE_MINS } from '../lib/tradingTime';
 import { dedupeRecords } from '../lib/record-dedupe';
 import { toFullCode } from '../lib/full-code';
+import {
+  selectAutoDates, planStrategyMerge, missingSnapshotDates, chunkDates, yieldToUI,
+} from '../lib/winrate-backfill';
 
 const RECORD_TOP_N = 5;
 const KLINE_COUNT = 250;
 const REF_INDEX_CODE = 'sh000001';
 /** 待补日期回看窗口（自然日）：getPendingDays 仅回看最近 N 天的工作日 */
 const PENDING_LOOKBACK_DAYS = 15;
+/** 回填互斥锁：自动回填与手动补全不能并发。模块级单例，跨 hook 实例共享。 */
+let backfillInFlight = false;
+export function isBackfillInFlight(): boolean { return backfillInFlight; }
+/** 自动回填范围：固定 5 天（以快照日期列表尾部为准，见 selectAutoDates 注释） */
+const AUTO_BACKFILL_DAYS = 5;
 
 /** 本地日期 YYYY-MM-DD（避免 UTC 偏移吞日期） */
 function localDate(d = new Date()): string {
@@ -351,7 +359,7 @@ export interface DailyReport {
 
 export function useWinRateRecorder() {
   const store = useWinRateStore();
-  const { records, appendRecords, updateTrade } = store;
+  const { records, appendRecords, replacePendingRecords, updateTrade } = store;
   const recordsRef = useRef<WinRateRecord[]>(records);
   useEffect(() => {
     recordsRef.current = records;
@@ -668,6 +676,73 @@ export function useWinRateRecorder() {
    * 与 recordStrategy 同等去重：按 (date, strategyId, code) 跳过已存在记录。
    * 任何网络/解析异常都静默吞掉，绝不阻断应用打开或原结算流程。
    */
+
+/**
+ * 战法级快照回填：每个候选日期都拉快照，按 date:strategyId:code 与本地合并。
+ * 覆盖优先级：待买入+intraday_late 才被 close 覆盖；持仓/已平仓/未成交一律保留本地。
+ * 幂等：同 key 已存在且不可覆盖 → 跳过；重复执行不产生新记录。
+ * @param dates 要回填的日期列表（自动=尾部5天；手动=剩余全部）
+ * @param opts.onProgress 进度回调（日期, 已完成数, 总数）
+ */
+async function backfillByStrategy(
+  dates: string[],
+  opts: { auto: boolean; onProgress?: (date: string, done: number, total: number) => void } = { auto: true },
+): Promise<{ days: number; added: number; replaced: number; skippedDates: string[] }> {
+  if (backfillInFlight || dates.length === 0) return { days: 0, added: 0, replaced: 0, skippedDates: [] };
+  backfillInFlight = true;
+  const out = { days: 0, added: 0, replaced: 0, skippedDates: [] as string[] };
+  try {
+    for (let idx = 0; idx < dates.length; idx++) {
+      const d = dates[idx];
+      opts.onProgress?.(d, idx + 1, dates.length);
+      try {
+        const snapRes = await marketApi.winrateSnapshot(d);
+        if (!snapRes.ok || !('snapshot' in snapRes) || !snapRes.snapshot) { out.skippedDates.push(d); continue; }
+        const snap = snapRes.snapshot;
+        const recordsNow = getLiveRecords();
+        const existingKeys = new Set(recordsNow.map((r) => r.date + ':' + r.strategyId + ':' + r.code));
+        const existingByKey = new Map(recordsNow.map((r) => [r.date + ':' + r.strategyId + ':' + r.code, r]));
+        const isHistorical = d !== localDate();
+        const fresh = recordsFromSnapshot(snap, isHistorical);
+        const byKey = new Map(fresh.map((r) => [r.date + ':' + r.strategyId + ':' + r.code, r]));
+        const plan = planStrategyMerge({
+          date: d,
+          strategies: (snap.strategies || []).map((s) => ({
+            strategyId: s.strategyId, strategyName: s.strategyName, hits: s.hits ?? [],
+          })),
+          existingKeys,
+          existingByKey,
+          makeHit: (_hit, strat) => {
+            const k = d + ':' + strat.strategyId + ':' + ((_hit as { code?: string }).code ?? '');
+            return byKey.get(k) as WinRateRecord;
+          },
+          makeNoSignal: (strat) => {
+            const k = d + ':' + strat.strategyId + ':NONE';
+            return byKey.get(k) as WinRateRecord;
+          },
+        }).toAdd;
+        const toAdd = plan.filter(Boolean);
+        const replaced = toAdd.filter((r) => existingKeys.has(r.date + ':' + r.strategyId + ':' + r.code));
+        const added = toAdd.filter((r) => !existingKeys.has(r.date + ':' + r.strategyId + ':' + r.code));
+        // 覆盖：先移除旧记录，再追加新记录（store 无按业务键替换 API）
+        if (replaced.length) {
+          {
+            replacePendingRecords(replaced);
+          }
+        }
+        if (added.length) appendRecords(added);
+        out.added += added.length;
+        out.replaced += replaced.length;
+        if (added.length || replaced.length) out.days++;
+      } catch { out.skippedDates.push(d); }
+      await yieldToUI(); // 批间让出主线程
+    }
+  } finally {
+    backfillInFlight = false;
+  }
+  return out;
+}
+
   const backfillCloseSnapshots = useCallback(async (): Promise<{
     dates: string[]; added: number; snapshotBackfillTriggered: boolean;
   }> => {
@@ -729,19 +804,17 @@ export function useWinRateRecorder() {
         cursor.setDate(cursor.getDate() + 1);
       }
 
-      // (2) 有快照但本地无真实记录的日期 → 拉快照，生成真实记录 / 当日 no_signal
-      const missing = snapshotDates.filter((d) => !existingDates.has(d));
-      for (const d of missing) {
-        try {
-          const snapRes = await marketApi.winrateSnapshot(d);
-          if (!snapRes.ok || !('snapshot' in snapRes) || !snapRes.snapshot) continue;
-          const isHistorical = d !== todayStr;
-          createdAll.push(...recordsFromSnapshot(snapRes.snapshot, isHistorical));
-        } catch {
-          /* 单日快照失败不影响其它日 */
-        }
+      // (2) 自动回填范围 = snapshotDates 倒序取前 AUTO_BACKFILL_DAYS 个（尾部5天）。
+      // 这是「快照日期列表的尾部5个」，不是自然日往回推5天，也不是最近5个工作日。
+      // 更早的缺口留给「补全历史快照」手动入口，避免一次性灌入全部历史。
+      // 战法级合并：每个候选日期都拉快照，按 date:strategyId:code 与本地比对，不再按整日跳过。
+      // 互斥：手动补全进行中时自动回填跳过本轮，下次打开再补。
+      if (!isBackfillInFlight()) {
+        const autoDates = selectAutoDates(snapshotDates, AUTO_BACKFILL_DAYS);
+        const autoResult = await backfillByStrategy(autoDates, { auto: true });
+        out.added += autoResult.added;
+        out.dates = [...new Set([...out.dates, ...autoDates.filter((d) => !autoResult.skippedDates.includes(d))])];
       }
-
       // (3) 统一按 (date, strategyId, code) 去重后写入；占位 code='NONE' 天然唯一
       const fresh = createdAll.filter(
         (r) => !existingKeys.has(r.date + ':' + r.strategyId + ':' + r.code),
@@ -840,6 +913,31 @@ export function useWinRateRecorder() {
     settleOpenRecords,
     getPendingDays,
     runDailyCycle,
+    /** 手动补全所有历史缺口（含自动范围外），每批3天，批间让出主线程；幂等可中断 */
+    backfillAllHistory: (onProgress?: (date: string, done: number, total: number) => void) => {
+      if (backfillInFlight) return Promise.resolve({ days: 0, added: 0, replaced: 0, skippedDates: ['in-flight'] });
+      return (async () => {
+        const datesRes = await marketApi.winrateSnapshotDates().catch(() => null);
+        const snapshotDates = datesRes?.ok && Array.isArray(datesRes.dates) ? datesRes.dates : [];
+        const recordedDates = new Set(getLiveRecords().filter((r) => r.trade?.status !== 'empty').map((r) => r.date));
+        const missing = missingSnapshotDates(snapshotDates, recordedDates);
+        const batches = chunkDates(missing, 3);
+        const totals = { days: 0, added: 0, replaced: 0, skippedDates: [] as string[] };
+        let done = 0;
+        for (const batch of batches) {
+          const r = await backfillByStrategy(batch, {
+            auto: false,
+            onProgress: (date, idxInBatch) => onProgress?.(date, done + idxInBatch, missing.length),
+          });
+          totals.days += r.days; totals.added += r.added; totals.replaced += r.replaced;
+          totals.skippedDates.push(...r.skippedDates);
+          done += batch.length;
+          await yieldToUI();
+        }
+        return totals;
+      })();
+    },
+    isBackfillInFlight,
   };
 }
 

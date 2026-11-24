@@ -55,6 +55,7 @@ import {
   secondaryMetric,
 } from '../src/lib/board-heat';
 import { formatStatsLine } from '../src/lib/kline-stats-line';
+import { selectAutoDates, planStrategyMerge, canOverwriteWithClose, missingSnapshotDates, chunkDates } from '../src/lib/winrate-backfill';
 import { buildNavContext, stepNav, canPrev, canNext, currentItem, ownerFor } from '../src/domain/nav-context';
 import { calcMA } from '../src/lib/indicators';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
@@ -2735,6 +2736,59 @@ function runStatsLineAssertion() {
     check(!code.includes('view.intradayHead.price'), 'intradayHead 渲染块已移除');
   }
 }
+function runBackfillAssertion() {
+  section('历史回填 B1：选择范围与分批');
+  {
+    const dates = ['2026-11-17','2026-11-18','2026-11-19','2026-11-20','2026-11-23','2026-11-24','2026-11-25'];
+    const auto = selectAutoDates(dates, 5);
+    check(auto.length === 5 && auto[0] === '2026-11-19' && auto[4] === '2026-11-25',
+          '自动回填取快照列表尾部5个（非自然日/工作日推算）');
+    check(chunkDates(['a','b','c','d','e','f','g'], 3).length === 3, '手动补全每批3天');
+    check(missingSnapshotDates(['11-20','11-23','11-24'], new Set(['11-23'])).join(',') === '11-24,11-20',
+          '缺失日期倒序返回');
+  }
+  section('历史回填 B2：覆盖优先级（待买入可覆盖，已结算保留）');
+  {
+    const pending = { trade: { status: 'open', buyPrice: null }, priceSource: 'intraday_late' } as any;
+    const holding = { trade: { status: 'open', buyPrice: 10 }, priceSource: 'intraday_late' } as any;
+    const closed = { trade: { status: 'closed', buyPrice: 10 }, priceSource: 'intraday_late' } as any;
+    check(canOverwriteWithClose(undefined) === true, '本地无记录 → 允许写入');
+    check(canOverwriteWithClose(pending) === true, '待买入+intraday_late → close 覆盖');
+    check(canOverwriteWithClose(holding) === false, '持仓中 → 保留本地');
+    check(canOverwriteWithClose(closed) === false, '已平仓 → 保留本地');
+    const mk = (sid: string, code: string) => ({ id: sid + ':' + code, date: 'D', strategyId: sid, code, priceSource: 'close', trade: { status: 'open', buyPrice: null } }) as any;
+    const plan = planStrategyMerge({
+      date: 'D',
+      strategies: [
+        { strategyId: 'A', hits: [{ code: 'c1' }] },
+        { strategyId: 'B', hits: [{ code: 'c2' }] },
+        { strategyId: 'C', hits: [] },
+      ],
+      existingKeys: new Set(['D:A:c1']),
+      existingByKey: new Map([['D:A:c1', pending]]),
+      makeHit: (h, st) => mk(st.strategyId, (h as { code: string }).code),
+      makeNoSignal: (st) => mk(st.strategyId, 'NONE'),
+    });
+    check(plan.toAdd.length === 2 && plan.toReplace.length === 1,
+          '本地A不重复写只覆盖、B补写、C占位补写');
+    check(plan.toAdd.some((r) => r.id === 'C:NONE'), '零命中战法补 no_signal');
+  }
+  section('历史回填 B3：静态接线');
+  {
+    const rec = fs.readFileSync('src/hooks/useWinRateRecorder.ts','utf8');
+    const scr = fs.readFileSync('src/components/WinRateScreen.tsx','utf8');
+    const store = fs.readFileSync('src/hooks/useWinRateStore.ts','utf8');
+    const app = fs.readFileSync('src/App.tsx','utf8');
+    check(rec.includes('selectAutoDates(snapshotDates, AUTO_BACKFILL_DAYS)'), '自动回填按快照尾部5天');
+    check(!rec.includes('const missing = snapshotDates.filter'), '整日跳过已移除');
+    check(rec.includes('planStrategyMerge({') && rec.includes('existingKeys,'), '战法级合并复用 existingKeys');
+    check(rec.includes('let backfillInFlight = false') && rec.includes('export function isBackfillInFlight'), '模块级互斥标记');
+    check(store.includes('replacePendingRecords') && store.includes("old.trade.buyPrice != null"), 'store 受控替换仅待买入');
+    check(scr.includes('补全历史快照') && scr.includes('正在补齐'), '手动补全按钮与进度文案');
+    check(scr.includes("backfillInFlight ? '正在自动补齐'"), '自动在跑时按钮置灰提示');
+    check(app.includes('onBackfillAll={recorder.backfillAllHistory}'), 'App 透传手动补全');
+  }
+}
 function runNavAssertion() {
   section('翻页导航 N1：上下文与边界');
   {
@@ -2860,6 +2914,7 @@ async function main() {
   runWatchButtonAssertion();
   runStatsLineAssertion();
   runNavAssertion();
+  runBackfillAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);

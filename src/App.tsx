@@ -271,6 +271,8 @@ export default function App() {
             onCloseKline={() => setDetail(null)}
             onNavigate={navigate}
             onNavChange={setNav}
+            onBackfillAll={recorder.backfillAllHistory}
+            backfillInFlight={recorder.isBackfillInFlight()}
           />
         ) : (
           <CapabilityMatrix />

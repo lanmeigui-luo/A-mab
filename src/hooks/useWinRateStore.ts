@@ -328,12 +328,32 @@ export function useWinRateStore() {
     }
   }, []);
 
+  /**
+   * 受控替换：仅替换「待买入（status=open 且 buyPrice==null）」的记录，用于收盘快照覆盖盘中计划。
+   * 已持仓/已平仓/未成交一律保留本地，绝不覆盖（与 14:50 盘中口径隔离）。
+   * 按业务键匹配；返回实际替换条数。
+   */
+  const replacePendingRecords = useCallback((incoming: WinRateRecord[]): { replaced: number } => {
+    if (!Array.isArray(incoming) || incoming.length === 0) return { replaced: 0 };
+    const byKey = new Map(incoming.map((r) => [recordBusinessKey(r), r]));
+    let replaced = 0;
+    const next = state.map((old) => {
+      const n = byKey.get(recordBusinessKey(old));
+      if (!n) return old;
+      if (old.trade.status !== 'open' || old.trade.buyPrice != null) return old;
+      replaced++;
+      return n;
+    });
+    if (replaced) setRecords(next);
+    return { replaced };
+  }, []);
   const getById = useCallback((id: string): WinRateRecord | null => state.find((r) => r.id === id) ?? null, []);
 
   return {
     records,
     total: records.length,
     appendRecords,
+    replacePendingRecords,
     updateTrade,
     exportWinRateJson,
     importWinRateJson,

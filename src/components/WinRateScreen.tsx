@@ -81,14 +81,28 @@ function WinRateScreenInner({
   onOpenKline,
   onCloseKline,
   onNavigate,
+  onBackfillAll,
+  backfillInFlight,
 }: {
   nav?: NavContext | null;
   onNavChange?: (nav: NavContext | null) => void;
   onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null) => void;
   onCloseKline?: () => void;
   onNavigate?: (delta: number) => void;
+  onBackfillAll?: (onProgress?: (date: string, done: number, total: number) => void) => Promise<{ days: number; added: number }>;
+  backfillInFlight?: boolean;
 }) {
   const { records, storageOk } = useWinRateStore();
+  const [backfillProgress, setBackfillProgress] = useState<string | null>(null);
+  const [backfillToast, setBackfillToast] = useState<string | null>(null);
+  const onBackfillClick = async () => {
+    if (!onBackfillAll || backfillInFlight) return;
+    setBackfillProgress('正在准备…');
+    const r = await onBackfillAll((date, done, total) => setBackfillProgress(`正在补齐 ${date} · ${done}/${total}`));
+    setBackfillProgress(null);
+    setBackfillToast(`已补齐 ${r.days} 天 / ${r.added} 条`);
+    window.setTimeout(() => setBackfillToast(null), 5000);
+  };
   const enabled = useMemo(() => listEnabledStrategies(), []);
   const enabledIds = useMemo(() => enabled.map((c) => c.strategyId), [enabled]);
   const [selected, setSelected] = useState<string[]>(enabledIds);
@@ -202,6 +216,13 @@ function WinRateScreenInner({
         <div className="panel-head">
           <h2>战法胜率筛选</h2>
           {!storageOk && <span className="chip warn">本地存储不可用</span>}
+      <button className="btn" disabled={!!backfillInFlight || !!backfillProgress}
+              title={backfillInFlight ? '正在自动补齐' : '补全所有历史快照缺口（每批3天）'}
+              onClick={onBackfillClick}>
+        {backfillInFlight ? '正在自动补齐' : '补全历史快照'}
+      </button>
+      {backfillProgress && <span className="muted">{backfillProgress}</span>}
+      {backfillToast && <span className="chip">{backfillToast}</span>}
         </div>
 
         <div className="wr-filters">
@@ -411,18 +432,23 @@ export function WinRateScreen({
   onOpenKline,
   onCloseKline,
   onNavigate,
+  onBackfillAll,
+  backfillInFlight,
 }: {
   nav?: NavContext | null;
   onNavChange?: (nav: NavContext | null) => void;
   onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null) => void;
   onCloseKline?: () => void;
   onNavigate?: (delta: number) => void;
+  onBackfillAll?: (onProgress?: (date: string, done: number, total: number) => void) => Promise<{ days: number; added: number }>;
+  backfillInFlight?: boolean;
 }) {
   return (
     <WinRateErrorBoundary>
       <WinRateScreenInner
         nav={nav} onNavChange={onNavChange}
         onOpenKline={onOpenKline} onCloseKline={onCloseKline} onNavigate={onNavigate}
+        onBackfillAll={onBackfillAll} backfillInFlight={backfillInFlight}
       />
     </WinRateErrorBoundary>
   );

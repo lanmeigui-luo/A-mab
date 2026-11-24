@@ -37,6 +37,7 @@
     "src/lib/board-heat.ts",
     "src/lib/kline-stats-line.ts",
     "src/domain/nav-context.ts",
+    "src/lib/winrate-backfill.ts",
     "scripts/winrate-acceptance.ts"
   ]
 }
