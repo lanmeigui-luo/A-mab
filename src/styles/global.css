@@ -2036,6 +2036,9 @@ button.idx-card:hover {
 /* ===== P5b 单笔交易详情弹层（居中 modal，复用通用 .modal） ===== */
 .wr-detail-modal {
   max-width: 860px;
+  /* 翻页箭头挂本容器外侧：必须 relative 作为定位基准，且不能 overflow:hidden 裁掉外挂箭头 */
+  position: relative;
+  overflow: visible;
 }
 .wr-detail-body {
   overflow-y: auto;

@@ -247,15 +247,17 @@ export function WinRateTradeDetailModal({
 
   return (
   <div className="modal-mask" onClick={onClose}>
+  <div className="modal wr-detail-modal" onClick={(e) => e.stopPropagation()}>
   {nav && nav.owner === 'trade-modal' && (
     <>
-      <button className="nav-arrow nav-prev" onClick={() => onNavigate?.(-1)}
+      <button className="nav-arrow nav-prev"
+              onClick={(e) => { e.stopPropagation(); onNavigate?.(-1); }}
               disabled={!canPrev(nav)} title="上一只" aria-label="上一只">◀</button>
-      <button className="nav-arrow nav-next" onClick={() => onNavigate?.(1)}
+      <button className="nav-arrow nav-next"
+              onClick={(e) => { e.stopPropagation(); onNavigate?.(1); }}
               disabled={!canNext(nav)} title="下一只" aria-label="下一只">▶</button>
     </>
   )}
-  <div className="modal wr-detail-modal" onClick={(e) => e.stopPropagation()}>
         <header className="modal-head">
           <h3>交易详情</h3>
           <span className="mono muted">

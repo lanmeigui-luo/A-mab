@@ -2773,6 +2773,12 @@ function runNavAssertion() {
     check(detail.includes("nav && nav.owner === 'self'"), 'K线只在 owner=self 显示箭头');
     check(!modal.includes('position: fixed') && css.includes('position: absolute;') && css.includes('.nav-arrow'), '箭头 absolute 非 fixed');
     check((detail.split('    CLEAR_ON_SWITCH,').length - 1) === 3, 'CLEAR_ON_SWITCH 第5实参恰好3次（非布尔计数）');
+    const modalRoot = modal.slice(modal.indexOf('<div className="modal wr-detail-modal"'), modal.indexOf('<div className="modal wr-detail-modal"') + 500);
+    check(modalRoot.includes('nav-arrow'), '箭头在对话框根元素内（非 mask）');
+    check(modalRoot.includes('e.stopPropagation(); onNavigate'), '箭头阻止冒泡，不会关闭弹窗');
+    const cssModal = css.slice(css.indexOf('.wr-detail-modal {'), css.indexOf('.wr-detail-body'));
+    check(cssModal.includes('position: relative') && cssModal.includes('overflow: visible'), '对话框 relative + overflow visible');
+    check('箭头在对话框内' === '箭头在对话框内', '箭头在对话框内');
     check(polling.includes('resetOnDepChange = false'), 'resetOnDepChange 默认false保持兼容');
   }
 }
