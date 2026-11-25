@@ -67,6 +67,8 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
   // 默认显示 30 根（视图更聚焦）；选项含 30。请求与均线计算见下方 fetchCount / precomputedMa。
   const [count, setCount] = useState(30);
   const [deepOpen, setDeepOpen] = useState(false);
+  // 战法线显隐：上移到详情页持有，默认 false、不持久化；切股票不重置
+  const [showPlan, setShowPlan] = useState(false);
 
   // 右边缘侧栏宽度（可拖拽左缘伸缩）
   const [width, setWidth] = useState(460);
@@ -312,7 +314,7 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
         </button>
         </header>
 
-        <div className="toolbar">
+        <div className={`toolbar ${headClass}`}>
           <div className="seg">
             {PERIODS.map((p) => (
               <button
@@ -390,6 +392,15 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
           <button className="btn primary" onClick={() => setDeepOpen(true)}>
             深度分析
           </button>
+          <button
+            className={"btn plan-toggle" + (showPlan ? ' on' : '')}
+            disabled={!tradePlan}
+            title={!tradePlan ? '当前未命中战法' : (showPlan ? '关闭战法线' : '显示战法线')}
+            aria-pressed={showPlan}
+            onClick={() => { if (tradePlan) setShowPlan((v) => !v); }}
+          >
+            战法线<span className="plan-toggle-state">{showPlan ? '：开' : '：关'}</span>
+          </button>
         </div>
 
         {active.error ? (
@@ -414,6 +425,7 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
             showBoll={showBoll}
             sub={sub}
             plan={tradePlan}
+            showPlan={showPlan}
             signals={signals}
           />
         )}

@@ -565,6 +565,21 @@ body {
   padding: 10px 12px;
 }
 
+.toolbar .plan-toggle {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.toolbar .plan-toggle.on { border-color: #d4a017; background: #fffbeb; color: #92400e; }
+.toolbar .plan-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 窄宽度让位顺序：先隐藏耗时 ms，再隐藏数据源标签，最后把「：开/关」收掉 */
+.dh-w2 .toolbar > span.muted, .dh-w3 .toolbar > span.muted { display: none; }
+.dh-w3 .toolbar > .src-tag { display: none; }
+.dh-w3 .plan-toggle-state { display: none; }
+/* w3 最后手段：收紧 toolbar/seg 间距与按钮 padding，消除 31px 溢出 */
+.dh-w3.toolbar { gap: 6px; padding: 8px; }
+.dh-w3.toolbar .seg-btn { padding: 4px 6px; }
+.dh-w3.toolbar .plan-toggle { margin-left: 0; padding: 4px 6px; }
+
 .seg {
   display: inline-flex;
   gap: 2px;
@@ -615,25 +630,6 @@ body {
   border-radius: var(--radius);
   padding: 12px;
 }
-
-.kline-wrap { position: relative; }
-.kline-plan-toolbar {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  z-index: 2;
-}
-.kline-plan-btn {
-  border: 1px solid var(--border);
-  background: #fff;
-  color: #374151;
-  border-radius: 6px;
-  padding: 4px 9px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.kline-plan-btn.on { border-color: #d4a017; background: #fffbeb; color: #92400e; }
-.kline-plan-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .kline-svg {
   width: 100%;

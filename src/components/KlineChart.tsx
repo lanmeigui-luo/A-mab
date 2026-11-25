@@ -29,6 +29,8 @@ interface Props {
   sub?: SubIndicator;
   /** 买卖价推荐（规则引擎算出的真实价位） */
   plan?: TradePlan | null;
+  /** 战法线显隐（由 StockDetail 持有，默认 false、不持久化） */
+  showPlan?: boolean;
   /** 命中战法信号 */
   signals?: StrategyHit[];
   /** 头部正在显示的现价与涨跌幅；分时底部统计必须与之同源 */
@@ -94,11 +96,9 @@ const PLAN_COLORS = {
 /** 分时均价线配色 */
 const AVG_COLOR = '#f59e0b';
 
-export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp, prevClose = null, showMa = true, showBoll = false, sub = 'vol', plan = null, signals = [], headerChangePct = null }: Props) {
+export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp, prevClose = null, showMa = true, showBoll = false, sub = 'vol', plan = null, showPlan = false, signals = [], headerChangePct = null }: Props) {
   const [hover, setHover] = useState<number | null>(null);
   const [sigOpen, setSigOpen] = useState(false);
-  // 战法线显隐：每次挂载默认不显示，不持久化（避免上次开启压扁本次 K 线）
-  const [showPlan, setShowPlan] = useState(false);
   // 仅开关打开时才让 plan 参与渲染与 y 轴；关闭时等价于没有 plan
   const effectivePlan = showPlan ? plan : null;
   const intraday = useMemo(() => (intradayProp && intradayProp.length ? intradayProp : null), [intradayProp]);
@@ -478,19 +478,6 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
 
   return (
     <div className="kline-wrap">
-    <div className="kline-plan-toolbar">
-      <button
-        type="button"
-        className={"kline-plan-btn" + (showPlan ? ' on' : '')}
-        disabled={!plan}
-        title={!plan ? '当前未命中战法' : (showPlan ? '关闭战法线' : '显示战法线')}
-        aria-pressed={showPlan}
-        onClick={() => { if (plan) setShowPlan((v) => !v); }}
-      >
-        战法线{showPlan ? '：开' : '：关'}
-      </button>
-    </div>
-    
       <svg viewBox={`0 0 ${W} ${H}`} className="kline-svg" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
         <rect x="0" y="0" width={W} height={H} fill="#ffffff" />
 

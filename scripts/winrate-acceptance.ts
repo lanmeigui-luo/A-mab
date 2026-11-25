@@ -2781,11 +2781,16 @@ function runTodayPrevCloseAssertion() {
           'I server 端日期新鲜度校验');
     check(lib.includes('Math.abs(bar.close - price) / price > maxDeviation'), '极端偏离35%校验');
     const kc = fs.readFileSync('src/components/KlineChart.tsx','utf8');
-    check(kc.includes('const [showPlan, setShowPlan] = useState(false)'), '战法线默认不显示');
+    check(detail.includes('const [showPlan, setShowPlan] = useState(false)'), '战法线默认不显示(状态上移)');
     check(kc.includes('const effectivePlan = showPlan ? plan : null'), '开关关闭时 plan 不参与');
     check((kc.split('effectivePlan?.buyLow, effectivePlan?.buyHigh').length-1) === 2, '分时+日K两处y轴均受控');
     check(kc.includes('[rows, precomputedMa, intraday, sub, effectivePlan'), '依赖数组用 effectivePlan');
-    check(kc.includes('当前未命中战法') && kc.includes('disabled={!plan}'), '未命中战法按钮置灰');
+    check(detail.includes('当前未命中战法') && detail.includes('disabled={!tradePlan}'), '未命中战法按钮置灰');
+    check(kc.includes('showPlan?: boolean') && !kc.includes('const [showPlan, setShowPlan]'), 'KlineChart 受控无内部state');
+    check(!kc.includes('kline-plan-toolbar') && detail.includes('plan-toggle'), '按钮在toolbar无浮动层');
+    const cssNow = fs.readFileSync('src/styles/global.css','utf8');
+    check(cssNow.includes('.toolbar .plan-toggle {') && cssNow.includes('flex-shrink: 0;'), '按钮不压缩');
+    check(cssNow.includes('.dh-w3 .plan-toggle-state { display: none; }'), '窄屏收文案');
   }
 }
 function runBackfillAssertion() {
