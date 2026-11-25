@@ -2780,6 +2780,12 @@ function runTodayPrevCloseAssertion() {
     check(server.includes('freshEnough') && server.includes('lastBarDate === localDateStr()'),
           'I server 端日期新鲜度校验');
     check(lib.includes('Math.abs(bar.close - price) / price > maxDeviation'), '极端偏离35%校验');
+    const kc = fs.readFileSync('src/components/KlineChart.tsx','utf8');
+    check(kc.includes('const [showPlan, setShowPlan] = useState(false)'), '战法线默认不显示');
+    check(kc.includes('const effectivePlan = showPlan ? plan : null'), '开关关闭时 plan 不参与');
+    check((kc.split('effectivePlan?.buyLow, effectivePlan?.buyHigh').length-1) === 2, '分时+日K两处y轴均受控');
+    check(kc.includes('[rows, precomputedMa, intraday, sub, effectivePlan'), '依赖数组用 effectivePlan');
+    check(kc.includes('当前未命中战法') && kc.includes('disabled={!plan}'), '未命中战法按钮置灰');
   }
 }
 function runBackfillAssertion() {

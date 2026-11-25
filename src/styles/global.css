@@ -616,6 +616,25 @@ body {
   padding: 12px;
 }
 
+.kline-wrap { position: relative; }
+.kline-plan-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 2;
+}
+.kline-plan-btn {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: #374151;
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kline-plan-btn.on { border-color: #d4a017; background: #fffbeb; color: #92400e; }
+.kline-plan-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .kline-svg {
   width: 100%;
   height: auto;

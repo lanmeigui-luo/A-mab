@@ -97,6 +97,10 @@ const AVG_COLOR = '#f59e0b';
 export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp, prevClose = null, showMa = true, showBoll = false, sub = 'vol', plan = null, signals = [], headerChangePct = null }: Props) {
   const [hover, setHover] = useState<number | null>(null);
   const [sigOpen, setSigOpen] = useState(false);
+  // 战法线显隐：每次挂载默认不显示，不持久化（避免上次开启压扁本次 K 线）
+  const [showPlan, setShowPlan] = useState(false);
+  // 仅开关打开时才让 plan 参与渲染与 y 轴；关闭时等价于没有 plan
+  const effectivePlan = showPlan ? plan : null;
   const intraday = useMemo(() => (intradayProp && intradayProp.length ? intradayProp : null), [intradayProp]);
 
   const view = useMemo(() => {
@@ -145,7 +149,7 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
         lo = Math.min(lo, prevClose);
       }
       // 买卖计划价位纳入纵轴范围，否则标注线会画到画布外
-      for (const p of [plan?.buyLow, plan?.buyHigh, plan?.stop, plan?.target1, plan?.target2]) {
+      for (const p of [effectivePlan?.buyLow, effectivePlan?.buyHigh, effectivePlan?.stop, effectivePlan?.target1, effectivePlan?.target2]) {
         if (p != null) {
           hi = Math.max(hi, p);
           lo = Math.min(lo, p);
@@ -229,17 +233,17 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
 
       // 买卖点标注（只在价格落在纵轴范围内时画）
       const planLines = [
-        plan?.buyLow != null && plan?.buyHigh != null && !plan.buyBlockedByLimitUp
-          ? { kind: 'band', from: y(plan.buyLow), to: y(plan.buyHigh), color: PLAN_COLORS.buy, text: `买入区间 ${fmtNum(plan.buyLow)}~${fmtNum(plan.buyHigh)}` }
+        effectivePlan != null && effectivePlan.buyLow != null && effectivePlan.buyHigh != null && !effectivePlan.buyBlockedByLimitUp
+          ? { kind: 'band', from: y(effectivePlan.buyLow), to: y(effectivePlan.buyHigh), color: PLAN_COLORS.buy, text: `买入区间 ${fmtNum(effectivePlan.buyLow)}~${fmtNum(effectivePlan.buyHigh)}` }
           : null,
-        plan?.stop != null
-          ? { kind: 'line', y: y(plan.stop), color: PLAN_COLORS.stop, text: `止损 ${fmtNum(plan.stop)}` }
+        effectivePlan?.stop != null
+          ? { kind: 'line', y: y(effectivePlan.stop), color: PLAN_COLORS.stop, text: `止损 ${fmtNum(effectivePlan.stop)}` }
           : null,
-        plan?.target1 != null
-          ? { kind: 'line', y: y(plan.target1), color: PLAN_COLORS.target, text: `目标1 ${fmtNum(plan.target1)}` }
+        effectivePlan?.target1 != null
+          ? { kind: 'line', y: y(effectivePlan.target1), color: PLAN_COLORS.target, text: `目标1 ${fmtNum(effectivePlan.target1)}` }
           : null,
-        plan?.target2 != null
-          ? { kind: 'line', y: y(plan.target2), color: PLAN_COLORS.target, text: `目标2 ${fmtNum(plan.target2)}` }
+        effectivePlan?.target2 != null
+          ? { kind: 'line', y: y(effectivePlan.target2), color: PLAN_COLORS.target, text: `目标2 ${fmtNum(effectivePlan.target2)}` }
           : null,
       ].filter(Boolean) as { kind: string; y?: number; from?: number; to?: number; color: string; text: string }[];
 
@@ -314,7 +318,7 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
       for (const v of boll.lower) if (v != null) lo = Math.min(lo, v);
     }
     // 买卖计划价位纳入纵轴范围，否则标注线会画到画布外
-    for (const p of [plan?.buyLow, plan?.buyHigh, plan?.stop, plan?.target1, plan?.target2]) {
+    for (const p of [effectivePlan?.buyLow, effectivePlan?.buyHigh, effectivePlan?.stop, effectivePlan?.target1, effectivePlan?.target2]) {
       if (p != null) { hi = Math.max(hi, p); lo = Math.min(lo, p); }
     }
     const pad = (hi - lo) * 0.06 || hi * 0.01 || 1;
@@ -402,17 +406,17 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
 
     // 买卖点标注（只在价格落在纵轴范围内时画）
     const planLines = [
-      plan?.buyLow != null && plan?.buyHigh != null && !plan.buyBlockedByLimitUp
-        ? { kind: 'band', from: y(plan.buyLow), to: y(plan.buyHigh), color: PLAN_COLORS.buy, text: `买入区间 ${fmtNum(plan.buyLow)}~${fmtNum(plan.buyHigh)}` }
+      effectivePlan != null && effectivePlan.buyLow != null && effectivePlan.buyHigh != null && !effectivePlan.buyBlockedByLimitUp
+        ? { kind: 'band', from: y(effectivePlan.buyLow), to: y(effectivePlan.buyHigh), color: PLAN_COLORS.buy, text: `买入区间 ${fmtNum(effectivePlan.buyLow)}~${fmtNum(effectivePlan.buyHigh)}` }
         : null,
-      plan?.stop != null
-        ? { kind: 'line', y: y(plan.stop), color: PLAN_COLORS.stop, text: `止损 ${fmtNum(plan.stop)}` }
+      effectivePlan?.stop != null
+        ? { kind: 'line', y: y(effectivePlan.stop), color: PLAN_COLORS.stop, text: `止损 ${fmtNum(effectivePlan.stop)}` }
         : null,
-      plan?.target1 != null
-        ? { kind: 'line', y: y(plan.target1), color: PLAN_COLORS.target, text: `目标1 ${fmtNum(plan.target1)}` }
+      effectivePlan?.target1 != null
+        ? { kind: 'line', y: y(effectivePlan.target1), color: PLAN_COLORS.target, text: `目标1 ${fmtNum(effectivePlan.target1)}` }
         : null,
-      plan?.target2 != null
-        ? { kind: 'line', y: y(plan.target2), color: PLAN_COLORS.target, text: `目标2 ${fmtNum(plan.target2)}` }
+      effectivePlan?.target2 != null
+        ? { kind: 'line', y: y(effectivePlan.target2), color: PLAN_COLORS.target, text: `目标2 ${fmtNum(effectivePlan.target2)}` }
         : null,
     ].filter(Boolean) as { kind: string; y?: number; from?: number; to?: number; color: string; text: string }[];
 
@@ -447,7 +451,7 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
       prevCloseY: null,
       volBars: [] as IntradayVolBar[],
     };
-  }, [rows, precomputedMa, intraday, sub, plan, prevClose, showMa, showBoll]);
+  }, [rows, precomputedMa, intraday, sub, effectivePlan, prevClose, showMa, showBoll]);
 
   if (!view) return <div className="empty">暂无 {intraday ? '分时' : 'K 线'}数据</div>;
 
@@ -474,6 +478,18 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
 
   return (
     <div className="kline-wrap">
+    <div className="kline-plan-toolbar">
+      <button
+        type="button"
+        className={"kline-plan-btn" + (showPlan ? ' on' : '')}
+        disabled={!plan}
+        title={!plan ? '当前未命中战法' : (showPlan ? '关闭战法线' : '显示战法线')}
+        aria-pressed={showPlan}
+        onClick={() => { if (plan) setShowPlan((v) => !v); }}
+      >
+        战法线{showPlan ? '：开' : '：关'}
+      </button>
+    </div>
     
       <svg viewBox={`0 0 ${W} ${H}`} className="kline-svg" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
         <rect x="0" y="0" width={W} height={H} fill="#ffffff" />
@@ -616,7 +632,7 @@ export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp,
             </span>
           )}
           {showBoll && <span><i style={{ background: '#64748b' }} /> BOLL(20,2)</span>}
-          {plan && (
+          {effectivePlan && (
             <span>
               <i style={{ background: PLAN_COLORS.buy }} /> 买入区间
               <i style={{ background: PLAN_COLORS.stop }} /> 止损
