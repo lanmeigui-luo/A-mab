@@ -82,6 +82,7 @@ function WinRateScreenInner({
   onCloseKline,
   onNavigate,
   onBackfillAll,
+  onEstimateBackfill,
   backfillInFlight,
 }: {
   nav?: NavContext | null;
@@ -90,18 +91,26 @@ function WinRateScreenInner({
   onCloseKline?: () => void;
   onNavigate?: (delta: number) => void;
   onBackfillAll?: (onProgress?: (date: string, done: number, total: number) => void) => Promise<{ days: number; added: number }>;
+  onEstimateBackfill?: () => Promise<{ days: number; records: number }>;
   backfillInFlight?: boolean;
 }) {
   const { records, storageOk } = useWinRateStore();
   const [backfillProgress, setBackfillProgress] = useState<string | null>(null);
   const [backfillToast, setBackfillToast] = useState<string | null>(null);
-  const onBackfillClick = async () => {
+  const [backfillConfirm, setBackfillConfirm] = useState<string | null>(null);
+  const beginBackfill = async () => {
     if (!onBackfillAll || backfillInFlight) return;
+    setBackfillConfirm(null);
     setBackfillProgress('正在准备…');
     const r = await onBackfillAll((date, done, total) => setBackfillProgress(`正在补齐 ${date} · ${done}/${total}`));
     setBackfillProgress(null);
     setBackfillToast(`已补齐 ${r.days} 天 / ${r.added} 条`);
     window.setTimeout(() => setBackfillToast(null), 5000);
+  };
+  const onBackfillClick = async () => {
+    if (!onBackfillAll || backfillInFlight) return;
+    const est = await (onEstimateBackfill?.() ?? Promise.resolve({ days: 0, records: 0 }));
+    setBackfillConfirm(`将补齐 ${est.days} 天 / 约 ${est.records} 条记录，是否继续？`);
   };
   const enabled = useMemo(() => listEnabledStrategies(), []);
   const enabledIds = useMemo(() => enabled.map((c) => c.strategyId), [enabled]);
@@ -223,6 +232,13 @@ function WinRateScreenInner({
       </button>
       {backfillProgress && <span className="muted">{backfillProgress}</span>}
       {backfillToast && <span className="chip">{backfillToast}</span>}
+      {backfillConfirm && (
+        <span className="chip warn" data-testid="backfill-confirm">
+          {backfillConfirm}
+          <button className="link" onClick={beginBackfill}>确认</button>
+          <button className="link" onClick={() => setBackfillConfirm(null)}>取消</button>
+        </span>
+      )}
         </div>
 
         <div className="wr-filters">
@@ -433,6 +449,7 @@ export function WinRateScreen({
   onCloseKline,
   onNavigate,
   onBackfillAll,
+  onEstimateBackfill,
   backfillInFlight,
 }: {
   nav?: NavContext | null;
@@ -441,6 +458,7 @@ export function WinRateScreen({
   onCloseKline?: () => void;
   onNavigate?: (delta: number) => void;
   onBackfillAll?: (onProgress?: (date: string, done: number, total: number) => void) => Promise<{ days: number; added: number }>;
+  onEstimateBackfill?: () => Promise<{ days: number; records: number }>;
   backfillInFlight?: boolean;
 }) {
   return (
@@ -448,7 +466,7 @@ export function WinRateScreen({
       <WinRateScreenInner
         nav={nav} onNavChange={onNavChange}
         onOpenKline={onOpenKline} onCloseKline={onCloseKline} onNavigate={onNavigate}
-        onBackfillAll={onBackfillAll} backfillInFlight={backfillInFlight}
+        onBackfillAll={onBackfillAll} onEstimateBackfill={onEstimateBackfill} backfillInFlight={backfillInFlight}
       />
     </WinRateErrorBoundary>
   );

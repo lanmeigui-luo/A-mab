@@ -178,9 +178,10 @@ function recordsFromSnapshot(snapshot: WinRateSnapshot, isHistorical: boolean): 
     const cfg = getWinRateConfig(strat.strategyId);
     if (!cfg) continue; // 后端有但前端配置未映射的战法：跳过，不写脏数据
     if ((strat.hits ?? []).length === 0) {
-      // 决策 4「历史不回溯」：仅当日快照为 0 命中的战法生成 no_signal 占位；
-      // 历史快照的 0 命中保持原样（不补写、不改历史口径）。
-      if (!isHistorical) {
+      // 历史零命中同样写 no_signal：用户诉求是「每天都有交代」。
+      // 快照只含当时已上线战法，不会给未上线战法补占位；不补会造成历史日之间不一致
+      // （11-23 有 2 个占位、11-19 没有）。
+      {
         created.push(makePlaceholderRecord({
           date: snapshot.date,
           kind: 'no_signal',
@@ -367,6 +368,9 @@ export function useWinRateRecorder() {
 
   const [recording, setRecording] = useState(false);
   const [settling, setSettling] = useState(false);
+  // P1：互斥锁的响应式镜像。模块级 backfillInFlight 仅用于跨实例互斥，
+  // 这个 state 才是驱动「补全历史快照」按钮置灰的真源（普通变量变更不触发 re-render）。
+  const [inFlight, setInFlight] = useState(false);
   const [lastReport, setLastReport] = useState<DailyReport | null>(null);
 
   /** 记录单个战法当日的 TopN 信号（screen 按该战法过滤 → 评分降序取前 5）。每条带 recordedAt/priceSource。 */
@@ -690,6 +694,7 @@ async function backfillByStrategy(
 ): Promise<{ days: number; added: number; replaced: number; skippedDates: string[] }> {
   if (backfillInFlight || dates.length === 0) return { days: 0, added: 0, replaced: 0, skippedDates: [] };
   backfillInFlight = true;
+  setInFlight(true);
   const out = { days: 0, added: 0, replaced: 0, skippedDates: [] as string[] };
   try {
     for (let idx = 0; idx < dates.length; idx++) {
@@ -739,6 +744,7 @@ async function backfillByStrategy(
     }
   } finally {
     backfillInFlight = false;
+    setInFlight(false);
   }
   return out;
 }
@@ -937,7 +943,25 @@ async function backfillByStrategy(
         return totals;
       })();
     },
-    isBackfillInFlight,
+    isBackfillInFlight: inFlight,
+  /** 预估手动补全规模（只读不写）：await 快照日期 + 逐日读 snapshot，返回天数与条数 */
+  estimateBackfill: async (): Promise<{ days: number; records: number }> => {
+    const datesRes = await marketApi.winrateSnapshotDates().catch(() => null);
+    const snapshotDates = datesRes?.ok && Array.isArray(datesRes.dates) ? datesRes.dates : [];
+    const recordedDates = new Set(getLiveRecords().filter((r) => r.trade?.status !== 'empty').map((r) => r.date));
+    const missing = missingSnapshotDates(snapshotDates, recordedDates);
+    let records = 0;
+    for (const d of missing) {
+      try {
+        const snapRes = await marketApi.winrateSnapshot(d);
+        if (snapRes.ok && 'snapshot' in snapRes && snapRes.snapshot) {
+          records += (snapRes.snapshot.strategies || []).reduce(
+            (n: number, s: { hits?: unknown[] }) => n + (s.hits || []).length + ((s.hits || []).length === 0 ? 1 : 0), 0);
+        }
+      } catch { /* 单日失败不计入预估 */ }
+    }
+    return { days: missing.length, records };
+  },
   };
 }
 

@@ -272,7 +272,8 @@ export default function App() {
             onNavigate={navigate}
             onNavChange={setNav}
             onBackfillAll={recorder.backfillAllHistory}
-            backfillInFlight={recorder.isBackfillInFlight()}
+            onEstimateBackfill={recorder.estimateBackfill}
+            backfillInFlight={recorder.isBackfillInFlight}
           />
         ) : (
           <CapabilityMatrix />

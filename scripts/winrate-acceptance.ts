@@ -2783,10 +2783,16 @@ function runBackfillAssertion() {
     check(!rec.includes('const missing = snapshotDates.filter'), '整日跳过已移除');
     check(rec.includes('planStrategyMerge({') && rec.includes('existingKeys,'), '战法级合并复用 existingKeys');
     check(rec.includes('let backfillInFlight = false') && rec.includes('export function isBackfillInFlight'), '模块级互斥标记');
+    check(rec.includes('const [inFlight, setInFlight] = useState(false)') &&
+          rec.includes('isBackfillInFlight: inFlight') && rec.includes('setInFlight(true)') && rec.includes('setInFlight(false)'),
+          '响应式 inFlight state 驱动按钮（非普通模块变量）');
     check(store.includes('replacePendingRecords') && store.includes("old.trade.buyPrice != null"), 'store 受控替换仅待买入');
     check(scr.includes('补全历史快照') && scr.includes('正在补齐'), '手动补全按钮与进度文案');
     check(scr.includes("backfillInFlight ? '正在自动补齐'"), '自动在跑时按钮置灰提示');
     check(app.includes('onBackfillAll={recorder.backfillAllHistory}'), 'App 透传手动补全');
+    check(!rec.includes('if (!isHistorical)') && rec.includes('每天都有交代'), '历史零命中也补 no_signal');
+    check(scr.includes('backfillConfirm') && scr.includes('是否继续？') && scr.includes('onEstimateBackfill'), '确认框含天数与条数');
+    check(scr.includes('beginBackfill') && !scr.includes('setBackfillEstimate'), '确认后才执行');
   }
 }
 function runNavAssertion() {
