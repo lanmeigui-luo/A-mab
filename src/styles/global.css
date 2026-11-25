@@ -572,8 +572,8 @@ body {
 .toolbar .plan-toggle.on { border-color: #d4a017; background: #fffbeb; color: #92400e; }
 .toolbar .plan-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
 /* 窄宽度让位顺序：先隐藏耗时 ms，再隐藏数据源标签，最后把「：开/关」收掉 */
-.dh-w2 .toolbar > span.muted, .dh-w3 .toolbar > span.muted { display: none; }
-.dh-w3 .toolbar > .src-tag { display: none; }
+.toolbar.dh-w2 > span.muted, .toolbar.dh-w3 > span.muted { display: none; }
+.toolbar.dh-w3 > .src-tag { display: none; }
 .dh-w3 .plan-toggle-state { display: none; }
 /* w3 最后手段：收紧 toolbar/seg 间距与按钮 padding，消除 31px 溢出 */
 .dh-w3.toolbar { gap: 6px; padding: 8px; }
