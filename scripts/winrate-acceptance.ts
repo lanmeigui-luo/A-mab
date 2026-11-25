@@ -2691,7 +2691,7 @@ function runWatchButtonAssertion() {
     check(detail.includes("width >= 560 ? 'dh-w0' : width >= 440 ? 'dh-w1' : width >= 380 ? 'dh-w2' : 'dh-w3'"), '面板宽度切四档');
     check(css.includes('min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;'), '名称 min-width:0 + ellipsis');
     check(css.includes('.drawer-head .price,\n.drawer-head .pct,\n.drawer-head .btn,\n.drawer-head .watch-btn { flex-shrink: 0; }'), '价格/按钮不收缩');
-    check(css.includes('.dh-w2 .watch-label, .dh-w3 .watch-label { display: none; }'), '窄宽度仅星标');
+    check(css.includes('.dh-w1 .watch-label, .dh-w2 .watch-label, .dh-w3 .watch-label { display: none; }'), '星标从w1起收为图标');
     check(detail.includes('aria-label={watched ?'), '星标保留 aria-label');
     check(!chart.includes('formatChange(view.intradayHead.changeVal)'), '图表浮标不再重复涨跌');
     check(!detail.includes('区间统计：') || !detail.includes('根，涨跌'), '区间统计不再重复涨跌');
@@ -2874,6 +2874,13 @@ function runNavAssertion() {
           '圆形/半透明/层级保持不变');
     const cssLayerNow = css.slice(css.indexOf('.panel-nav-layer'), css.indexOf('.panel-nav {'));
     check(cssLayerNow.includes('gap: 8px'), '两箭头间距仍为8px');
+    const headCss = css.slice(css.indexOf('.drawer-head {'), css.indexOf('.watch-btn {'));
+    check(!/.dh-w[0-3][^}]*h2[^}]*display:s*none/.test(css), '无隐藏 h2 的规则');
+    const codeCss = headCss.slice(headCss.indexOf('.drawer-head .dh-code'), headCss.indexOf('.drawer-head .price'));
+    check(codeCss.includes('min-width: 0') && codeCss.includes('text-overflow: ellipsis') && codeCss.includes('flex-shrink: 2'),
+          'dh-code min-width:0 + ellipsis + shrink2');
+    check(headCss.includes('min-width: 4em'), 'h2 保底4em');
+    check(css.includes('.dh-w1 .watch-label') && css.includes('.dh-w3.drawer-head { gap: 8px; }'), '星标提前隐藏+w3 gap8');
   }
 }
 // ───────── 入口 ─────────

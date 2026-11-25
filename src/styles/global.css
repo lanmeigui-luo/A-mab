@@ -431,10 +431,19 @@ body {
 .drawer-head h2 {
   margin: 0;
   font-size: 18px;
+  /* 名称优先：允许省略但保底4字宽，永不归零 */
+  min-width: 4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawer-head .dh-code {
+  /* 代码必须先让位：min-width:0 是省略号生效的前提 */
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 2;
 }
 .drawer-head .price {
   font-size: 20px;
@@ -466,11 +475,17 @@ body {
 }
 .watch-btn.on { color: #D97706; border-color: #F59E0B; background: #FFFBEB; }
 .watch-star { font-size: 15px; line-height: 1; }
-/* 四档降级：优先级 涨跌幅 > 名称 > 代码 > 涨跌额 */
+/* 四档降级（560/440/380 断点不变）：名称优先，先压代码再隐藏代码；涨跌幅永不隐藏 */
+/* w1(440~560)：名称完整 / 代码省略号 / 涨跌额 / 涨跌幅 / 星标仅图标 */
+.dh-w1 .watch-label, .dh-w2 .watch-label, .dh-w3 .watch-label { display: none; }
+/* w2(380~440)：名称完整 / 代码省略号 / 隐藏涨跌额 / 涨跌幅 / 星标仅图标 */
 .dh-w2 .dh-change, .dh-w3 .dh-change { display: none; }
+/* w3(<380)：名称省略号(≥4em) / 隐藏代码 / 隐藏涨跌额 / 涨跌幅 / 星标仅图标 */
 .dh-w3 .dh-code { display: none; }
-.dh-w2 .watch-label, .dh-w3 .watch-label { display: none; }
-.dh-w2 .watch-btn, .dh-w3 .watch-btn { padding: 4px 6px; }
+.dh-w1 .watch-btn, .dh-w2 .watch-btn, .dh-w3 .watch-btn { padding: 4px 6px; }
+/* w3 额外让位：gap 12→8，收起按钮缩小 padding */
+.dh-w1.drawer-head, .dh-w2.drawer-head, .dh-w3.drawer-head { gap: 8px; }
+.dh-w2 .btn, .dh-w3 .btn { padding: 4px 6px; }
 .app-toast {
   position: fixed;
   left: 50%;
