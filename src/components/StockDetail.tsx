@@ -1,6 +1,14 @@
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { usePolling } from '@/hooks/usePolling';
-import { resolvePrevClose, calcPrevChange } from '@/lib/prev-close';
+import { resolveTodayPrevClose, calcPrevChange } from '@/lib/prev-close';
+
+/** 本地日期 YYYY-MM-DD（避免 UTC 偏移吞日期） */
+function localDateStr(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 import { marketApi, type EvalResponse } from '@/services/market';
 import { KlineChart, type SubIndicator } from '@/components/KlineChart';
 import { DeepAnalysis } from '@/components/DeepAnalysis';
@@ -107,9 +115,14 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
     CLEAR_ON_SWITCH,
   );
   const klineRows = baseKline.data?.rows ?? [];
-  const klinePrevClose = klineRows.length >= 2 ? klineRows[klineRows.length - 2]?.close : null;
-  // 优先级：日K倒数第二根 > 实时 quote.prevClose；拿不到就是 null，绝不拿当前价凑数。
-  const effectivePrevClose = resolvePrevClose(klinePrevClose, liveQuote?.prevClose);
+  // 当日昨收统一由纯函数判定：接口优先，日K兜底须过日期新鲜度 + 极端偏离双校验。
+  // 不再按数组位置取 length-2 —— 盘中日K不含当天，位置取会退到前天（600814 事故根因）。
+  const effectivePrevClose = resolveTodayPrevClose({
+    quotePrevClose: liveQuote?.prevClose,
+    klineRows,
+    today: localDateStr(),
+    price: liveQuote?.price ?? null,
+  });
   const effectiveChange = calcPrevChange(liveQuote?.price ?? null, effectivePrevClose);
 
   // 分时（腾讯当日分钟序列）：仅在分时周期激活轮询，避免空轮询

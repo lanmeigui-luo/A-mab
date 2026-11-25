@@ -23,6 +23,20 @@ import { isKlineBatchValid } from './klineValidate.mjs';
 
 const SIDECAR = process.env.SIDECAR || 'http://127.0.0.1:8788';
 
+/** 本地日期 YYYY-MM-DD（避免 UTC 偏移吞日期）；跳过周末反推上一交易日 */
+function localDateStr(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function prevTradingDateGuess(date) {
+  const d = new Date(date + 'T00:00:00');
+  if (Number.isNaN(d.getTime())) return null;
+  do { d.setDate(d.getDate() - 1); } while (d.getDay() === 0 || d.getDay() === 6);
+  return localDateStr(d);
+}
+
 /** 模块级 sidecar 请求（loadContext 内的 getJson 是局部的，runScreen 另需一份） */
 async function sidecarJson(path, ms = 30000) {
   const ctrl = new AbortController();
@@ -640,9 +654,14 @@ export async function runScreen({
       const closed = !trading;
       const kClose = ind.last.close;
       const kPrev = ind.prev.close;
-      const price = closed ? kClose : (exact?.price ?? snap.price);
-      const prevClose = closed ? kPrev : (exact?.prevClose ?? snap.prevClose);
-      const changePct = closed
+      // 【2026-11-25 日期新鲜度校验】休市时用日K构造当日快照，必须先确认日K最后一根就是今天。
+      // 否则日K滞后（盘中不含当天），按位置取 ind.prev 会退到前天，算出错误涨跌幅。
+      // 此时改用接口值；接口也没有则 changePct=null（标记不可用，不写错误值）。
+      const lastBarDate = ind.last?.date ?? null;
+      const freshEnough = closed && lastBarDate != null && /^\d{4}-\d{2}-\d{2}$/.test(lastBarDate) && lastBarDate === localDateStr();
+      const price = freshEnough ? kClose : (exact?.price ?? snap.price);
+      const prevClose = freshEnough ? kPrev : (exact?.prevClose ?? snap.prevClose);
+      const changePct = freshEnough
         ? kPrev
           ? ((kClose - kPrev) / kPrev) * 100
           : null

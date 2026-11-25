@@ -41,7 +41,7 @@ import * as path from 'path';
 import { matchesToolbarFilters, filterByToolbar } from '../src/lib/record-filters';
 import { intradayVolumeColor, setColorBlindMode } from '../src/lib/market-colors';
 import { friendlyMarketError, countBreadth, canUseStale, MARKET_FETCH_FAILED_TEXT } from '../src/lib/market-fallback';
-import { resolvePrevClose, calcPrevChange, isUsablePrevClose, firstValidPrice } from '../src/lib/prev-close';
+import { resolvePrevClose, resolveTodayPrevClose, prevTradingDateGuess, calcPrevChange, isUsablePrevClose, firstValidPrice } from '../src/lib/prev-close';
 import { isPlanTradable, isSameDayClose } from '../src/lib/trade-plan-validity';
 import { describeBuyRange } from '../src/lib/buy-range-label';
 import { isPlanIncomplete, isMissingPlanAnomaly } from '../src/lib/plan-missing';
@@ -2736,6 +2736,52 @@ function runStatsLineAssertion() {
     check(!code.includes('view.intradayHead.price'), 'intradayHead 渲染块已移除');
   }
 }
+function runTodayPrevCloseAssertion() {
+  section('当日昨收 P1：接口优先 + 日期新鲜度 + 极端偏离');
+  {
+    const today = '2026-11-25'; // 周三，上一交易日 11-24
+    const barsYesterday = [{ date: '2026-11-22', close: 6.90 }, { date: '2026-11-24', close: 7.59 }];
+    const barsStale = [{ date: '2026-11-21', close: 6.90 }, { date: '2026-11-22', close: 6.90 }];
+    check(prevTradingDateGuess(today) === '2026-11-24', '上一交易日反推正确');
+    // A 接口有效 → 用接口（600814：接口 7.59，日K误算 6.90）
+    const a = resolveTodayPrevClose({ quotePrevClose: 7.59, klineRows: barsStale, today, price: 8.35 });
+    const ac = calcPrevChange(8.35, a);
+    check(a === 7.59 && ac?.changePct === 10.01, 'A 600814 用接口 7.59 → +10.01%');
+    // B 接口缺失 + 日K为上一交易日
+    const b = resolveTodayPrevClose({ quotePrevClose: null, klineRows: barsYesterday, today, price: 8.35 });
+    check(b === 7.59, 'B 接口缺失用日K上一交易日 7.59');
+    // C 接口缺失 + 日K滞后（前天）→ null
+    const c = resolveTodayPrevClose({ quotePrevClose: null, klineRows: barsStale, today, price: 8.35 });
+    check(c === null, 'C 日K滞后返回 null（无基准价）');
+    // D 接口被污染成现价 → 视为无效，走日K
+    const d = resolveTodayPrevClose({ quotePrevClose: 8.35, klineRows: barsYesterday, today, price: 8.35 });
+    check(d === 7.59, 'D 接口 prevClose=现价 视为无效走日K');
+    // E 日K为空
+    const e = resolveTodayPrevClose({ quotePrevClose: null, klineRows: [], today, price: 8.35 });
+    check(e === null, 'E 日K空 → 无基准价');
+    // F 极端偏离 60%
+    const f = resolveTodayPrevClose({ quotePrevClose: null,
+      klineRows: [{ date: '2026-11-24', close: 5.20 }], today, price: 8.35 });
+    check(f === null, 'F 日K偏离>35% → 无基准价');
+    // G 三处同源
+    const g = resolveTodayPrevClose({ quotePrevClose: 7.59, klineRows: barsYesterday, today, price: 8.35 });
+    const gc = calcPrevChange(8.35, g);
+    check(gc?.changePct === 10.01 && gc?.change === 0.76, 'G 头部/底部/图表共用同一基准');
+  }
+  section('当日昨收 P2：静态接线');
+  {
+    const detail = fs.readFileSync('src/components/StockDetail.tsx','utf8');
+    const server = fs.readFileSync('server/screen.mjs','utf8');
+    const lib = fs.readFileSync('src/lib/prev-close.ts','utf8');
+    check(detail.includes('resolveTodayPrevClose({') && !detail.includes('klineRows.length - 2'),
+          'H 前端不再按位置取日K昨收');
+    check(detail.includes('prevClose={effectivePrevClose}') && detail.includes('headerChangePct={effectiveChange'),
+          '图表虚线与头部统计同源');
+    check(server.includes('freshEnough') && server.includes('lastBarDate === localDateStr()'),
+          'I server 端日期新鲜度校验');
+    check(lib.includes('Math.abs(bar.close - price) / price > maxDeviation'), '极端偏离35%校验');
+  }
+}
 function runBackfillAssertion() {
   section('历史回填 B1：选择范围与分批');
   {
@@ -2916,6 +2962,7 @@ async function main() {
   runIntradayVolumeColorAssertion();
   runMarketFallbackAssertion();
   runPrevCloseAssertion();
+  runTodayPrevCloseAssertion();
   runT1AndPlanAssertion();
   runBuyRangeLabelAssertion();
   runPlanHardGateAssertion();
