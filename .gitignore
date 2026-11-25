@@ -21,6 +21,10 @@ data/
 scripts/_smoke*.cjs
 scripts/verify/
 
+# CDP 临时 profile 与会话根一次性脚本（不进版本库）
+.cdp-profile/
+/_*.cjs
+
 # Packaging temp dirs and logs
 .tmp_dist_test/
 __builder*.log
