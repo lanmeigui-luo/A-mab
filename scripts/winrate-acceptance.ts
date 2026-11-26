@@ -2794,6 +2794,7 @@ function runTodayPrevCloseAssertion() {
     check(cssNow.includes('.toolbar.dh-w2 > span.muted, .toolbar.dh-w3 > span.muted { display: none; }') &&
           cssNow.includes('.toolbar.dh-w3 > .src-tag { display: none; }'), '让位规则用复合选择器（toolbar自带dh-wX）');
     check(!/.dh-w[0-3] .toolbar/.test(cssNow), '无 .dh-w* .toolbar 后代写法（永不命中）');
+    check(cssNow.includes('.dh-w3.toolbar { gap: 6px; padding: 8px; }'), 'w3 紧凑gap兜底保留');
   }
 }
 function runBackfillAssertion() {
