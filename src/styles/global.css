@@ -2194,3 +2194,62 @@ button.idx-card:hover {
 .wr-row-click:hover {
   background: var(--accent-soft);
 }
+
+
+/* ---------- 自选股联想搜索（本地字典：代码 / 名称 / 拼音首字母 / 全拼） ---------- */
+.combo {
+  position: relative;
+  flex: 0 1 340px;
+  min-width: 220px;
+}
+.combo-input {
+  width: 100%;
+}
+.combo-list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(17, 24, 39, 0.12);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.combo-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.combo-item.active {
+  background: var(--accent-soft);
+}
+.combo-name {
+  color: var(--text);
+}
+.combo-code {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.combo-ini {
+  margin-left: auto;
+  color: var(--muted-2);
+  font-size: 11px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.combo-list.up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}

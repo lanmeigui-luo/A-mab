@@ -1,15 +1,17 @@
 import { buildNavContext, type NavContext } from '@/domain/nav-context';
-import { useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { Quote, QuoteResponse } from '@/domain/types';
 import { changeColor, formatChange, formatPct } from '@/lib/market-colors';
 import { DASH, fmtAmount, fmtNum } from '@/lib/format';
 import type { WatchItem } from '@/hooks/useWatchList';
+import { normalizeKey, searchStocks, type StockHit } from '@/lib/stock-search';
+import { STOCK_ROWS, stockOf } from '@/lib/stock-index';
 
 interface Props {
   items: WatchItem[];
   resp: QuoteResponse | null;
   error: string | null;
-  onAdd: (code: string) => { ok: boolean; reason?: string };
+  onAdd: (code: string, name?: string) => { ok: boolean; reason?: string };
   onRemove: (code: string) => void;
   onOpenKline: (fullCode: string, name: string, nav?: NavContext | null) => void;
   storageOk: boolean;
@@ -29,6 +31,12 @@ export function WatchList({ items, resp, error, onAdd, onRemove, onOpenKline, st
   const [input, setInput] = useState('');
   const [keyword, setKeyword] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
+  const [listOpen, setListOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const [composing, setComposing] = useState(false);
+  const comboRef = useRef<HTMLDivElement | null>(null);
+  const [dropUp, setDropUp] = useState(false);
+  const [listMaxH, setListMaxH] = useState(344);
 
   const byCode = useMemo(() => {
     const m = new Map<string, Quote>();
@@ -41,21 +49,106 @@ export function WatchList({ items, resp, error, onAdd, onRemove, onOpenKline, st
       .map((it) => ({ item: it, quote: byCode.get(it.fullCode) }))
       .filter(({ item, quote }) => {
         if (!keyword) return true;
-        const k = keyword.toLowerCase();
-        return item.code.includes(k) || (quote?.name ?? item.name ?? '').toLowerCase().includes(k);
+        const k = normalizeKey(keyword);
+        if (!k) return true;
+        const name = quote?.name ?? item.name ?? '';
+        if (item.code.includes(k) || normalizeKey(name).includes(k)) return true;
+        // 顶部过滤也走同一份字典：可用拼音首字母/全拼筛已有自选
+        const row = stockOf(item.code);
+        return !!row && (row.ini.includes(k) || row.py.includes(k));
       });
     // 默认按涨跌幅降序；无行情的排在末尾
     return list.sort((a, b) => (b.quote?.changePct ?? -Infinity) - (a.quote?.changePct ?? -Infinity));
   }, [items, byCode, keyword]);
 
-  const handleAdd = () => {
-    const code = input.trim();
-    const r = onAdd(code);
+  /** 联想候选：本地字典匹配，最多 10 条；中文输入法合成期间不查，避免拼音过程抖动 */
+  const hits = useMemo<StockHit[]>(() => {
+    const q = input.trim();
+    if (!q || composing) return [];
+    return searchStocks(STOCK_ROWS, q, 10);
+  }, [input, composing]);
+
+  const showList = listOpen && hits.length > 0;
+
+  // 自选股面板常在页面底部：下方空间不足时向上翻，并按可用高度收缩，避免被视口裁切
+  useLayoutEffect(() => {
+    if (!showList) {
+      setDropUp(false);
+      return;
+    }
+    const el = comboRef.current?.querySelector('input');
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom - 16;
+    const above = r.top - 16;
+    const need = Math.min(hits.length * 32 + 10, 344);
+    const up = below < need && above > below;
+    setDropUp(up);
+    setListMaxH(Math.max(140, Math.min(344, up ? above : below)));
+  }, [showList, hits.length]);
+
+  // 点击组件外关闭下拉
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (comboRef.current && !comboRef.current.contains(e.target as Node)) setListOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, []);
+
+  const pick = (hit: StockHit) => {
+    const r = onAdd(hit.code, hit.name);
     if (r.ok) {
       setInput('');
       setNotice(null);
+      setListOpen(false);
+      setActive(0);
     } else {
       setNotice(r.reason ?? '添加失败');
+    }
+  };
+
+  const handleAdd = () => {
+    const raw = input.trim();
+    if (!raw) return;
+    if (showList && hits[active]) {
+      pick(hits[active]);
+      return;
+    }
+    if (!/^\d{6}$/.test(raw)) {
+      setNotice('未找到匹配的股票');
+      return;
+    }
+    const r = onAdd(raw);
+    if (r.ok) {
+      setInput('');
+      setNotice(null);
+      setListOpen(false);
+      setActive(0);
+    } else {
+      setNotice(r.reason ?? '添加失败');
+    }
+  };
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === 'ArrowDown' && showList) {
+      e.preventDefault();
+      setActive((i) => Math.min(i + 1, hits.length - 1));
+      return;
+    }
+    if (e.key === 'ArrowUp' && showList) {
+      e.preventDefault();
+      setActive((i) => Math.max(i - 1, 0));
+      return;
+    }
+    if (e.key === 'Escape') {
+      setListOpen(false);
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAdd();
     }
   };
 
@@ -79,14 +172,51 @@ export function WatchList({ items, resp, error, onAdd, onRemove, onOpenKline, st
       {!storageOk && <div className="alert error">本地存储不可用，自选股本次会话后不会保留</div>}
 
       <div className="add-row">
-        <input
-          className="input"
-          placeholder="输入 6 位代码添加，如 600519"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-          maxLength={6}
-        />
+        <div className="combo" ref={comboRef}>
+          <input
+            className="input combo-input"
+            placeholder="代码 / 名称 / 拼音，如 600519、崇达、cdjs"
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setListOpen(true);
+              setActive(0);
+            }}
+            onFocus={() => setListOpen(true)}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => {
+              setComposing(false);
+              setListOpen(true);
+            }}
+            onKeyDown={onKeyDown}
+            autoComplete="off"
+            spellCheck={false}
+            aria-autocomplete="list"
+            aria-expanded={showList}
+          />
+          {showList && (
+            <ul className={'combo-list' + (dropUp ? ' up' : '')} role="listbox" style={{ maxHeight: listMaxH }}>
+              {hits.map((h, i) => (
+                <li
+                  key={h.code}
+                  role="option"
+                  aria-selected={i === active}
+                  className={'combo-item' + (i === active ? ' active' : '')}
+                  onMouseEnter={() => setActive(i)}
+                  onMouseDown={(e) => {
+                    // preventDefault：避免 input 先 blur 导致候选消失、点击落空
+                    e.preventDefault();
+                    pick(h);
+                  }}
+                >
+                  <span className="combo-name">{h.name}</span>
+                  <span className="combo-code">({h.code})</span>
+                  <span className="combo-ini">{h.ini}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <button className="btn primary" onClick={handleAdd}>
           添加自选
         </button>
@@ -94,7 +224,7 @@ export function WatchList({ items, resp, error, onAdd, onRemove, onOpenKline, st
       </div>
 
       {items.length === 0 ? (
-        <div className="empty">暂无自选股，输入代码点击「添加自选」</div>
+        <div className="empty">暂无自选股，输入代码、名称或拼音首字母后点击「添加自选」</div>
       ) : rows.length === 0 ? (
         <div className="empty">未找到匹配结果</div>
       ) : (
