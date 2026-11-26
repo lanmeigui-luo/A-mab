@@ -781,6 +781,11 @@ button.idx-card:hover {
   display: flex;
   gap: 8px;
 }
+.backup-dict { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
+.backup-dict-head { font-weight: 700; font-size: 13px; margin-bottom: 6px; }
+.backup-dict-meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; margin-bottom: 8px; }
+.backup-dict-note { font-size: 12px; line-height: 1.6; }
+.backup-dict-note code { background: #f3f4f6; padding: 1px 4px; border-radius: 4px; font-size: 11px; }
 .backup-list {
   margin: 0;
   padding-left: 18px;
@@ -2233,6 +2238,12 @@ button.idx-card:hover {
 }
 .combo-item.active {
   background: var(--accent-soft);
+}
+mark.combo-hit {
+  background: transparent;
+  color: #dc2626;
+  font-weight: 700;
+  padding: 0;
 }
 .combo-name {
   color: var(--text);

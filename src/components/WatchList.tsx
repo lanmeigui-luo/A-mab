@@ -4,7 +4,7 @@ import type { Quote, QuoteResponse } from '@/domain/types';
 import { changeColor, formatChange, formatPct } from '@/lib/market-colors';
 import { DASH, fmtAmount, fmtNum } from '@/lib/format';
 import type { WatchItem } from '@/hooks/useWatchList';
-import { normalizeKey, searchStocks, type StockHit } from '@/lib/stock-search';
+import { normalizeKey, searchStocks, highlightSegments, type StockHit } from '@/lib/stock-search';
 import { STOCK_ROWS, stockOf } from '@/lib/stock-index';
 
 interface Props {
@@ -152,6 +152,11 @@ export function WatchList({ items, resp, error, onAdd, onRemove, onOpenKline, st
     }
   };
 
+  /** 命中片段用 <mark> 标红；未命中的字段原样文本 */
+  const highlight = (text: string, q: string) =>
+    highlightSegments(text, q).map((seg, i) =>
+      seg.hit ? <mark key={i} className="combo-hit">{seg.text}</mark> : <span key={i}>{seg.text}</span>);
+
   return (
     <section className="panel">
       <header className="panel-head">
@@ -209,9 +214,9 @@ export function WatchList({ items, resp, error, onAdd, onRemove, onOpenKline, st
                     pick(h);
                   }}
                 >
-                  <span className="combo-name">{h.name}</span>
-                  <span className="combo-code">({h.code})</span>
-                  <span className="combo-ini">{h.ini}</span>
+                  <span className="combo-name">{highlight(h.name, h.kind === 'name' ? input : '')}</span>
+                  <span className="combo-code">({highlight(h.code, h.kind === 'code' ? input : '')})</span>
+                  <span className="combo-ini">{highlight(h.ini, h.kind === 'ini' ? input : '')}</span>
                 </li>
               ))}
             </ul>

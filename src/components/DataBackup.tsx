@@ -3,6 +3,7 @@ import { useWatchList } from '@/hooks/useWatchList';
 import { useStrategyParams } from '@/hooks/useStrategyParams';
 import { useColorBlind } from '@/hooks/useColorBlind';
 import { useWinRateStore } from '@/hooks/useWinRateStore';
+import { STOCK_ROWS, STOCK_INDEX_BUILT_AT } from '@/lib/stock-index';
 
 /**
  * 本地数据备份（需求：本地优先 + 提供导出/导入 JSON 备份）
@@ -97,6 +98,20 @@ export function DataBackup({ onClose }: { onClose: () => void }) {
             <li>战法胜率记录：{wr.records.length} 条</li>
             <li className="muted">模型 API Key 不导出（本机加密存储，导出即等于明文泄露）</li>
           </ul>
+
+          <div className="backup-dict">
+            <div className="backup-dict-head">股票字典（代码 / 名称 / 拼音联想）</div>
+            <div className="backup-dict-meta">
+              <span>条数：<b>{STOCK_ROWS.length}</b> 只</span>
+              <span>更新时间：<b>{STOCK_INDEX_BUILT_AT ? new Date(STOCK_INDEX_BUILT_AT).toLocaleString('zh-CN') : '未知'}</b></span>
+            </div>
+            <div className="backup-dict-note muted">
+              字典为随包静态文件，新股上市 / 更名 / 退市后需重建才能在搜索中命中。
+              桌面版不提供在线重建（重建依赖 pinyin-pro 与联网数据源）；在开发机项目根目录执行：
+              <code>node scripts/build-stock-index.mjs</code>
+              生成 <code>src/assets/stock-index.json</code> 后重新打包即可生效。
+            </div>
+          </div>
 
           {!wl.storageOk && <div className="alert warn">本机 localStorage 不可用，备份功能受限</div>}
           {msg && <div className="alert info">{msg}</div>}

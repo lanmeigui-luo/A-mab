@@ -11,7 +11,9 @@ export default defineConfig({
     },
   },
   server: {
+    host: '127.0.0.1',
     port: 5173,
+    strictPort: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8787',
@@ -28,9 +30,9 @@ export default defineConfig({
     // 避免 electron-builder 的 files:dist/**/* 与 extraResources:dist/backend 重复收录同一份后端，
     // 导致安装包体积翻倍（实测 asar 211MB 几乎全是 dist/backend）。
     outDir: 'dist/web',
-    // 不清空 outDir：dist/backend 下是 PyInstaller 产物，手动 rm -rf dist 才会清掉；
-    // vite 只写 dist/web，不影响 dist/backend。
-    emptyOutDir: false,
+    // 每次构建清空 dist/web：emptyOutDir 只作用于 outDir（dist/web），
+    // 不会碰同级的 dist/backend（PyInstaller 产物）。防止历史 chunk 累积。
+    emptyOutDir: true,
     sourcemap: true,
   },
 });

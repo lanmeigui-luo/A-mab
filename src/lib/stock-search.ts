@@ -35,6 +35,49 @@ export function normalizeKey(input: string): string {
     .toLowerCase();
 }
 
+/**
+ * 把显示文本按 query 切成高亮片段。用于候选列表 <mark> 渲染。
+ * 索引对齐策略：normalizeKey 只做去空白/全角转半角/小写，可能改变长度（空格被删）；
+ * 因此按「逐字符累加归一化后的键」定位原文区间，保证中文/拼音/代码都能正确高亮。
+ */
+export interface Seg { text: string; hit: boolean }
+export function highlightSegments(text: string, query: string): Seg[] {
+  const raw = String(text ?? '');
+  const q = normalizeKey(query);
+  if (!q || !raw) return [{ text: raw, hit: false }];
+
+  // 原文每个字符 → 归一化后对应的片段；空片段（纯空格）归到相邻字符
+  const chars: { ch: string; key: string; start: number }[] = [];
+  let pos = 0;
+  for (const ch of raw) {
+    const key = normalizeKey(ch);
+    chars.push({ ch, key, start: pos });
+    pos += ch.length;
+  }
+  const mapped = chars.map((c) => c.key).join('');
+  const at = mapped.indexOf(q);
+  if (at < 0) return [{ text: raw, hit: false }];
+
+  // 找到覆盖 mapped[at .. at+q.length) 的原文起止
+  let acc = 0, startChar = -1, endChar = -1;
+  for (let i = 0; i < chars.length; i++) {
+    const next = acc + chars[i].key.length;
+    if (startChar < 0 && next > at) startChar = i;
+    if (endChar < 0 && next >= at + q.length) endChar = i;
+    acc = next;
+  }
+  if (startChar < 0) startChar = 0;
+  if (endChar < 0) endChar = chars.length - 1;
+  const cutStart = chars[startChar].start;
+  const cutEnd = chars[endChar].start + chars[endChar].ch.length;
+
+  const segs: Seg[] = [];
+  if (cutStart > 0) segs.push({ text: raw.slice(0, cutStart), hit: false });
+  segs.push({ text: raw.slice(cutStart, cutEnd), hit: true });
+  if (cutEnd < raw.length) segs.push({ text: raw.slice(cutEnd), hit: false });
+  return segs;
+}
+
 export function searchStocks(rows: StockRow[], query: string, limit = 10): StockHit[] {
   const q = normalizeKey(query);
   if (!q || limit <= 0) return [];
