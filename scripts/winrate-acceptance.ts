@@ -58,6 +58,13 @@ import { formatStatsLine } from '../src/lib/kline-stats-line';
 import { selectAutoDates, planStrategyMerge, canOverwriteWithClose, missingSnapshotDates, chunkDates } from '../src/lib/winrate-backfill';
 import { buildNavContext, stepNav, canPrev, canNext, currentItem, ownerFor } from '../src/domain/nav-context';
 import { calcMA } from '../src/lib/indicators';
+import {
+  planFromRecord,
+  resolveChartPlan,
+  recordedStrategyLabel,
+  buildSignalGroups,
+  shouldShowBothSections,
+} from '../src/lib/plan-overlay';
 import { TRADE_RULE_VERSION, WINRATE_STRATEGY_CONFIG } from '../src/domain/winrate-config';
 import type { WinRateRecord, TradeRecord, SellReason, WinRateAnomaly } from '../src/domain/winrate';
 import type { KlineRow } from '../src/domain/types';
@@ -123,6 +130,8 @@ type Plan = {
   date: string;
   code?: string;
   name?: string;
+  strategyName?: string;
+  strategyId?: string;
   buyLow?: number;
   buyHigh?: number;
   stop?: number;
@@ -147,8 +156,8 @@ function makeRec(p: Plan): WinRateRecord {
   return {
     id: `rec_${Math.random().toString(36).slice(2, 10)}`,
     date: p.date,
-    strategyId: 'test-strategy',
-    strategyName: '测试战法',
+    strategyId: p.strategyId ?? 'test-strategy',
+    strategyName: p.strategyName ?? '测试战法',
     code: p.code ?? '600000',
     name: p.name ?? '测试股',
     determinismScore: 80,
@@ -2782,10 +2791,10 @@ function runTodayPrevCloseAssertion() {
     check(lib.includes('Math.abs(bar.close - price) / price > maxDeviation'), '极端偏离35%校验');
     const kc = fs.readFileSync('src/components/KlineChart.tsx','utf8');
     check(detail.includes('const [showPlan, setShowPlan] = useState(false)'), '战法线默认不显示(状态上移)');
-    check(kc.includes('const effectivePlan = showPlan ? plan : null'), '开关关闭时 plan 不参与');
+    check(kc.includes('resolveChartPlan(showPlan, overridePlan, plan)'), '开关关闭时 plan 不参与（走 resolveChartPlan）');
     check((kc.split('effectivePlan?.buyLow, effectivePlan?.buyHigh').length-1) === 2, '分时+日K两处y轴均受控');
     check(kc.includes('[rows, precomputedMa, intraday, sub, effectivePlan'), '依赖数组用 effectivePlan');
-    check(detail.includes('当前未命中战法') && detail.includes('disabled={!tradePlan}'), '未命中战法按钮置灰');
+    check(detail.includes('无可用战法计划') && detail.includes('disabled={!planAvailable}'), '未命中战法按钮置灰');
     check(kc.includes('showPlan?: boolean') && !kc.includes('const [showPlan, setShowPlan]'), 'KlineChart 受控无内部state');
     check(!kc.includes('kline-plan-toolbar') && detail.includes('plan-toggle'), '按钮在toolbar无浮动层');
     const cssNow = fs.readFileSync('src/styles/global.css','utf8');
@@ -2990,6 +2999,7 @@ async function main() {
   runStatsLineAssertion();
   runNavAssertion();
   runBackfillAssertion();
+  runPlanOverlayAssertion();
 
   console.log(`\n──────── 结果 ────────`);
   console.log(`通过 ${passed} / ${passed + failed}`);
@@ -3055,3 +3065,83 @@ function runFinalCloseoutAssertion() {
   }
 }
 
+
+// ───────── 历史交易明细 → 个股K线战法叠加（用户修正版最终逻辑） ─────────
+function runPlanOverlayAssertion() {
+  section('交易明细打开K线：记录战法叠加 + 默认关战法线');
+
+  // —— 用例 A：从交易明细点开，战法线默认关闭 ——
+  // 组件 showPlan 初始 false；纯函数层：showPlan=false 时无论有无 plan 都不画线。
+  {
+    const hist = planFromRecord(makeRec({ date: '2026-11-20', buyLow: 10, buyHigh: 10.5, stop: 9.5, target1: 11, target2: 12 }));
+    const live = planFromRecord(makeRec({ date: '2026-11-26', buyLow: 20, buyHigh: 21, stop: 19, target1: 22, target2: 24 }));
+    check(hist != null, '历史记录可重建出当时的买卖计划');
+    check(resolveChartPlan(false, hist, live) === null, '战法线默认关：showPlan=false 时不画任何线');
+    check(resolveChartPlan(false, hist, null) === null, '战法线默认关：仅历史计划也不画');
+    const sdSrc = fs.readFileSync('src/components/StockDetail.tsx', 'utf8');
+    check(/useState\(false\)/.test(sdSrc.match(/showPlan[^;]*useState\([^)]*\)/)?.[0] ?? ''),
+          'StockDetail 中 showPlan 初始值为 false（默认关）');
+  }
+
+  // —— 用例 B：手动点开后画「当前记录的战法线」（历史计划优先）——
+  {
+    const hist = planFromRecord(makeRec({ date: '2026-11-20', buyLow: 10, buyHigh: 10.5, stop: 9.5, target1: 11, target2: 12 }));
+    const live = planFromRecord(makeRec({ date: '2026-11-26', buyLow: 20, buyHigh: 21, stop: 19, target1: 22, target2: 24 }));
+    const drawn = resolveChartPlan(true, hist, live);
+    check(drawn === hist, 'showPlan=true 且有历史计划 → 画历史记录线（override 优先）');
+    check(drawn?.stop === 9.5 && drawn?.target1 === 11, '历史记录线用的是当时的止损/目标价位');
+    check(resolveChartPlan(true, null, live) === live, '无历史计划（自选股入口）→ 回落实时线');
+    check(resolveChartPlan(true, null, null) === null, '两种计划都没有 → 不画线');
+    // KlineChart 已改用 resolveChartPlan，不再用旧的 showPlan ? plan : null
+    const kcSrc = fs.readFileSync('src/components/KlineChart.tsx', 'utf8');
+    check(kcSrc.includes('resolveChartPlan(showPlan, overridePlan, plan)'), 'KlineChart 走 resolveChartPlan 联动');
+  }
+
+  // —— 用例 C：战法信号区同时展示「历史记录」+「实时命中」两部分 ——
+  {
+    const hist = planFromRecord(makeRec({ date: '2026-11-20', strategyName: '首板打板', buyLow: 10, buyHigh: 10.5, stop: 9.5, target1: 11, target2: 12 }));
+    check(recordedStrategyLabel('首板打板') === '记录战法：首板打板', '明确写出「记录战法：首板打板」');
+    check(recordedStrategyLabel(null) === '记录战法', '无战法名时也有「记录战法」前缀');
+
+    const groups = buildSignalGroups(hist, '首板打板', null);
+    check(groups.length === 1 && groups[0].kind === 'recorded', '仅有历史计划 → 一组记录战法');
+    check(groups[0].label === '记录战法：首板打板', '记录战法组标题正确');
+
+    const live = planFromRecord(makeRec({ date: '2026-11-26', strategyName: '隔夜持股法', buyLow: 20, buyHigh: 21, stop: 19, target1: 22 }));
+    const both = buildSignalGroups(hist, '首板打板', live);
+    check(both.length === 2, '历史 + 实时计划并存 → 两组');
+    check(both[0].kind === 'recorded' && both[1].kind === 'live', '顺序：先记录战法、后实时评估');
+    check(both[1].label === '实时评估战法', '实时组标签为「实时评估战法」');
+
+    const liveSignals = [{ id: 's1', name: '首板打板', hitRatio: 1, conds: [] }];
+    check(shouldShowBothSections(true, liveSignals) === true, '有历史 + 实时命中 → 两部分同时展示');
+    check(shouldShowBothSections(false, liveSignals) === false, '无历史（自选股入口）→ 不展示历史部分');
+    check(shouldShowBothSections(true, []) === false, '有历史但实时无命中 → 只展示历史部分');
+
+    const sdSrc = fs.readFileSync('src/components/StockDetail.tsx', 'utf8');
+    check(sdSrc.includes("signalGroups.filter((g) => g.kind === 'recorded')"), '战法信号区渲染历史记录组');
+    check(sdSrc.includes('实时命中战法'), '战法信号区保留实时命中战法列表');
+  }
+
+  // —— 用例 D：从 record 重建计划，保留真实价位、缺失不硬凑 ——
+  {
+    const rec = makeRec({ date: '2026-11-20', buyLow: 10, buyHigh: 10.5, stop: 9.5, target1: 11, target2: 12 });
+    const p = planFromRecord(rec)!;
+    check(p.buyLow === 10 && p.buyHigh === 10.5 && p.stop === 9.5, '计划价位与记录一致');
+    check(p.buyMid === 10.25, '买入中价由上下沿计算');
+    check(p.addPrice === null && p.addBasis === '' && p.profitLossRatio === null, '记录未存的字段不硬凑固定值');
+    check(planFromRecord(makeRec({ date: '2026-11-20' })) === null, '无任何计划价位 → 返回 null（无历史计划可叠加）');
+    check(planFromRecord(null) === null, '无记录 → 返回 null');
+  }
+
+  // —— 用例 E：透传链条（弹窗 → App → StockDetail → KlineChart）——
+  {
+    const modalSrc = fs.readFileSync('src/components/WinRateTradeDetailModal.tsx', 'utf8');
+    check(modalSrc.includes('planFromRecord(record)'), '交易明细弹窗点开K线时重建历史计划');
+    check(/onOpenKline\([\s\S]*?planFromRecord\(record\)/.test(modalSrc), '历史计划随 onOpenKline 传出');
+    const appSrc = fs.readFileSync('src/App.tsx', 'utf8');
+    check(appSrc.includes('overridePlan={detail.overridePlan}'), 'App 把 overridePlan 传给 StockDetail');
+    const sdSrc = fs.readFileSync('src/components/StockDetail.tsx', 'utf8');
+    check(sdSrc.includes('overridePlan={overridePlan}'), 'StockDetail 把 overridePlan 传给 KlineChart');
+  }
+}

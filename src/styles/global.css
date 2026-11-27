@@ -1260,6 +1260,42 @@ button.idx-card:hover {
   color: var(--muted-2);
 }
 
+/* 历史记录战法（从交易明细点开 K 线时叠加）：与主色区分的暖色边框，标明是记录快照 */
+.recorded-signal-box {
+  grid-template-columns: 1fr;
+  border-left: 3px solid #d4a017;
+  padding: 8px 10px;
+  background: rgba(212, 160, 23, 0.06);
+  border-radius: 4px;
+}
+.recorded-signal-box .cond-group > strong {
+  color: #b45309;
+  font-size: 13px;
+}
+.recorded-plan-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 6px 14px;
+  margin-top: 8px;
+}
+.recorded-plan-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.recorded-plan-summary span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.recorded-plan-summary strong {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.live-signal-head {
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .ind-box {
   font-size: 11px;
   font-variant-numeric: tabular-nums;

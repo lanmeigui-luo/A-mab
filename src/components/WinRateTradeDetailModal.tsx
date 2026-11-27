@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { NavContext } from '@/domain/nav-context';
 import { canPrev, canNext } from '@/domain/nav-context';
 import type { WinRateRecord } from '@/domain/winrate';
+import { planFromRecord } from '@/lib/plan-overlay';
 import {
   TRADE_VIEW_STATUS_LABELS,
   SELL_REASON_LABELS,
@@ -177,7 +178,13 @@ export function WinRateTradeDetailModal({
 }: {
   record: WinRateRecord | null;
   onClose: () => void;
-  onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null) => void;
+  onOpenKline?: (
+    fullCode: string,
+    name: string,
+    nav?: NavContext | null,
+    overridePlan?: ReturnType<typeof planFromRecord>,
+    overrideStrategyName?: string | null,
+  ) => void;
   nav?: NavContext | null;
   onNavigate?: (delta: number) => void;
 }) {
@@ -322,7 +329,15 @@ export function WinRateTradeDetailModal({
                   <button
                     className="btn primary"
                     style={{ marginTop: 6 }}
-                    onClick={() => onOpenKline(toFullCode(record.code), record.name, nav)}
+                    onClick={() =>
+                      onOpenKline(
+                        toFullCode(record.code),
+                        record.name,
+                        nav,
+                        planFromRecord(record),
+                        record.strategyName,
+                      )
+                    }
                   >
                     打开个股K线
                   </button>

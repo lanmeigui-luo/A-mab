@@ -5,6 +5,7 @@ import { WatchList } from '@/components/WatchList';
 import { StockDetail } from '@/components/StockDetail';
 import type { NavContext } from '@/domain/nav-context';
 import { stepNav, currentItem } from '@/domain/nav-context';
+import type { TradePlan } from '@/domain/strategy';
 import { StrategyScreen } from '@/components/StrategyScreen';
 import { BoardPage } from '@/components/BoardPage';
 import { CapabilityMatrix } from '@/components/CapabilityMatrix';
@@ -83,7 +84,13 @@ export default function App() {
   // detail 只描述「K 线面板当前显示哪只」；弹窗是否打开由 WinRateScreen 从 nav 派生。
   // 这样 K 线未打开（detail=null）时，弹窗翻页仍能推进 nav。
   const [nav, setNav] = useState<NavContext | null>(null);
-  const [detail, setDetail] = useState<{ fullCode: string; name: string } | null>(null);
+  const [detail, setDetail] = useState<{
+    fullCode: string;
+    name: string;
+    /** 从交易明细点开时的历史计划/战法名；自选股等普通入口为 null */
+    overridePlan?: TradePlan | null;
+    overrideStrategyName?: string | null;
+  } | null>(null);
   const navigate = (delta: number) => {
     setNav((prev) => {
       if (!prev) return prev;
@@ -91,14 +98,22 @@ export default function App() {
       if (!next) return prev;
       const item = currentItem(next);
       // K 线面板开着时同步切到同一条；未开时只推进 nav，弹窗由派生自动跟随。
-      if (item) setDetail((d) => (d ? { fullCode: item.fullCode, name: item.name } : d));
+      // 翻页时清空历史计划：nav item 不带 plan，继续沿用上一条的 override 会显示错误记录战法。
+      if (item) setDetail((d) => (d ? { fullCode: item.fullCode, name: item.name, overridePlan: null, overrideStrategyName: null } : d));
       return next;
     });
   };
   // 各入口打开详情：同时设置 nav 与 detail（nav 可为 null，如大盘指数/战法）
-  const openDetail = (fullCode: string, name: string, nextNav?: NavContext | null) => {
+  // 后两个参数仅「交易明细 → 打开个股K线」入口传入，用于叠加历史记录战法。
+  const openDetail = (
+    fullCode: string,
+    name: string,
+    nextNav?: NavContext | null,
+    overridePlan?: TradePlan | null,
+    overrideStrategyName?: string | null,
+  ) => {
     setNav(nextNav ?? null);
-    setDetail({ fullCode, name });
+    setDetail({ fullCode, name, overridePlan: overridePlan ?? null, overrideStrategyName: overrideStrategyName ?? null });
   };
 
   const watchQuotes = usePolling(
@@ -297,6 +312,8 @@ export default function App() {
           nav={nav}
           onNavigate={navigate}
           onClose={() => setDetail(null)}
+          overridePlan={detail.overridePlan}
+          overrideStrategyName={detail.overrideStrategyName}
         />
       )}
 

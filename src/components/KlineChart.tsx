@@ -6,6 +6,7 @@ import { calcMA, calcBOLL, calcMACD, calcKDJ, calcRSI, rangeStats } from '@/lib/
 import type { MaSeries } from '@/lib/indicators';
 import { fmtNum, fmtVolume } from '@/lib/format';
 import { formatStatsLine } from '@/lib/kline-stats-line';
+import { resolveChartPlan } from '@/lib/plan-overlay';
 
 export type SubIndicator = 'vol' | 'macd' | 'kdj' | 'rsi';
 
@@ -27,8 +28,10 @@ interface Props {
   showBoll?: boolean;
   /** 副图指标 */
   sub?: SubIndicator;
-  /** 买卖价推荐（规则引擎算出的真实价位） */
+  /** 实时买卖价推荐（规则引擎算出的真实价位，自选股等普通入口使用） */
   plan?: TradePlan | null;
+  /** 历史记录战法线：从交易明细点开时传入当时的计划，showPlan 打开时优先画它 */
+  overridePlan?: TradePlan | null;
   /** 战法线显隐（由 StockDetail 持有，默认 false、不持久化） */
   showPlan?: boolean;
   /** 命中战法信号 */
@@ -96,11 +99,12 @@ const PLAN_COLORS = {
 /** 分时均价线配色 */
 const AVG_COLOR = '#f59e0b';
 
-export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp, prevClose = null, showMa = true, showBoll = false, sub = 'vol', plan = null, showPlan = false, signals = [], headerChangePct = null }: Props) {
+export function KlineChart({ rows, precomputedMa = null, intraday: intradayProp, prevClose = null, showMa = true, showBoll = false, sub = 'vol', plan = null, overridePlan = null, showPlan = false, signals = [], headerChangePct = null }: Props) {
   const [hover, setHover] = useState<number | null>(null);
   const [sigOpen, setSigOpen] = useState(false);
-  // 仅开关打开时才让 plan 参与渲染与 y 轴；关闭时等价于没有 plan
-  const effectivePlan = showPlan ? plan : null;
+  // 仅开关打开时才让 plan 参与渲染与 y 轴；关闭时等价于没有 plan。
+  // 打开时优先画历史记录线（overridePlan），无 override 才回落实时线（plan）。
+  const effectivePlan = resolveChartPlan(showPlan, overridePlan, plan);
   const intraday = useMemo(() => (intradayProp && intradayProp.length ? intradayProp : null), [intradayProp]);
 
   const view = useMemo(() => {

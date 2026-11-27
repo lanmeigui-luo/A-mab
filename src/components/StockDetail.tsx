@@ -22,6 +22,8 @@ import { calcMA, rangeStats } from '@/lib/indicators';
 import { useWinRateStore } from '@/hooks/useWinRateStore';
 import { computeWinRateStats, filterWinRateRecords } from '@/lib/winrate-stats';
 import { TRADE_VIEW_STATUS_LABELS, tradeViewCategory } from '@/domain/winrate';
+import { buildSignalGroups } from '@/lib/plan-overlay';
+import type { TradePlan } from '@/domain/strategy';
 
 // 切股票时清空旧轮询数据；具名常量避免布尔位置歧义（enabled 与 resetOnDepChange 都是 boolean）
 const CLEAR_ON_SWITCH = true;
@@ -37,6 +39,10 @@ interface Props {
   nav?: NavContext | null;
   onNavigate?: (delta: number) => void;
   onClose: () => void;
+  /** 从交易明细点开时传入的历史计划（当时的买卖计划快照）；普通入口为 null */
+  overridePlan?: TradePlan | null;
+  /** 历史记录战法名（如「首板打板」）；与 overridePlan 配套 */
+  overrideStrategyName?: string | null;
 }
 
 type PeriodKey = 'minute' | 'day' | 'week' | 'month' | 'm5' | 'm15' | 'm30' | 'm60';
@@ -58,7 +64,7 @@ const FQ: { key: 'qfq' | 'hfq' | 'none'; label: string }[] = [
   { key: 'none', label: '不复权' },
 ];
 
-export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, nav, onNavigate, onClose }: Props) {
+export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, nav, onNavigate, onClose, overridePlan = null, overrideStrategyName = null }: Props) {
   const [period, setPeriod] = useState<PeriodKey>('minute');
   const [fq, setFq] = useState<'qfq' | 'hfq' | 'none'>('qfq');
   const [showMa, setShowMa] = useState(true);
@@ -94,6 +100,10 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
   const ev = usePolling<EvalResponse>(() => marketApi.eval(fullCode), 60000, [fullCode]);
   const tradePlan = ev.data?.tradePlan ?? null;
   const signals = ev.data?.strategies ?? [];
+  // 可画线计划：历史记录优先（从交易明细进来），否则用实时评估的 plan
+  const planAvailable = overridePlan ?? tradePlan;
+  // 战法信号区两组内容：历史记录战法（若有）+ 实时评估战法（若有），可并存
+  const signalGroups = buildSignalGroups(overridePlan, overrideStrategyName, tradePlan);
 
   const isIntraday = period === 'minute';
   const isMinute = period.startsWith('m') && period !== 'month';
@@ -394,10 +404,10 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
           </button>
           <button
             className={"btn plan-toggle" + (showPlan ? ' on' : '')}
-            disabled={!tradePlan}
-            title={!tradePlan ? '当前未命中战法' : (showPlan ? '关闭战法线' : '显示战法线')}
+            disabled={!planAvailable}
+            title={!planAvailable ? '当前无可用战法计划' : (showPlan ? '关闭战法线' : '显示战法线')}
             aria-pressed={showPlan}
-            onClick={() => { if (tradePlan) setShowPlan((v) => !v); }}
+            onClick={() => { if (planAvailable) setShowPlan((v) => !v); }}
           >
             战法线<span className="plan-toggle-state">{showPlan ? '：开' : '：关'}</span>
           </button>
@@ -425,6 +435,7 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
             showBoll={showBoll}
             sub={sub}
             plan={tradePlan}
+            overridePlan={overridePlan}
             showPlan={showPlan}
             signals={signals}
           />
@@ -444,6 +455,49 @@ export function StockDetail({ fullCode, name, quote, resp, watchList, onToast, n
             {ev.data?.elapsedMs != null && <span className="muted"> · {ev.data.elapsedMs} ms</span>}
           </div>
           {ev.error && <div className="alert error">战法评估失败：{ev.error}</div>}
+
+          {/* 第一部分：历史记录战法（从交易明细点开时）——明确写出「记录战法：xxx」+ 当时的买卖计划 */}
+          {signalGroups.filter((g) => g.kind === 'recorded').map((g) => (
+            <div key="recorded" className="cond-box recorded-signal-box">
+              <div className="cond-group">
+                <strong>{g.label}</strong>
+                {g.plan && (
+                  <div className="recorded-plan-summary">
+                    <div>
+                      <span>买入区间</span>
+                      <strong>
+                        {g.plan.buyBlockedByLimitUp
+                          ? '涨停不可买入'
+                          : g.plan.buyLow != null
+                            ? `${fmtNum(g.plan.buyLow)}~${fmtNum(g.plan.buyHigh)}`
+                            : '不可算'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>止损价</span>
+                      <strong>{g.plan.stop != null ? fmtNum(g.plan.stop) : DASH}</strong>
+                    </div>
+                    <div>
+                      <span>目标1</span>
+                      <strong>{g.plan.target1 != null ? fmtNum(g.plan.target1) : DASH}</strong>
+                    </div>
+                    <div>
+                      <span>目标2</span>
+                      <strong>{g.plan.target2 != null ? fmtNum(g.plan.target2) : DASH}</strong>
+                    </div>
+                  </div>
+                )}
+                <div className="muted" style={{ marginTop: 6 }}>
+                  以上为该笔交易记录当时的买卖计划快照，非当前实时评估。
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {/* 第二部分：实时评估战法（原有 /api/eval 命中列表），与历史记录并存 */}
+          <div className="live-signal-head muted" style={{ marginTop: 8 }}>
+            {signalGroups.some((g) => g.kind === 'recorded') ? '实时命中战法' : ''}
+          </div>
           {!ev.error && signals.length === 0 && (
             <div className="empty">
               {ev.data?.ok === false

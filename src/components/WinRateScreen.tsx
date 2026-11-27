@@ -11,6 +11,7 @@ import { WinRateTradeTable } from './WinRateTradeTable';
 import { WinRateTradeDetailModal } from './WinRateTradeDetailModal';
 import type { NavContext } from '@/domain/nav-context';
 import { currentItem } from '@/domain/nav-context';
+import type { TradePlan } from '@/domain/strategy';
 import { EquityCurveChart } from './charts/EquityCurveChart';
 import { HoldDaysWinRateChart } from './charts/HoldDaysWinRateChart';
 import { SellReasonDistributionChart } from './charts/SellReasonDistributionChart';
@@ -87,7 +88,7 @@ function WinRateScreenInner({
 }: {
   nav?: NavContext | null;
   onNavChange?: (nav: NavContext | null) => void;
-  onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null) => void;
+  onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null, overridePlan?: TradePlan | null, overrideStrategyName?: string | null) => void;
   onCloseKline?: () => void;
   onNavigate?: (delta: number) => void;
   onBackfillAll?: (onProgress?: (date: string, done: number, total: number) => void) => Promise<{ days: number; added: number }>;
@@ -454,7 +455,7 @@ export function WinRateScreen({
 }: {
   nav?: NavContext | null;
   onNavChange?: (nav: NavContext | null) => void;
-  onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null) => void;
+  onOpenKline?: (fullCode: string, name: string, nav?: NavContext | null, overridePlan?: TradePlan | null, overrideStrategyName?: string | null) => void;
   onCloseKline?: () => void;
   onNavigate?: (delta: number) => void;
   onBackfillAll?: (onProgress?: (date: string, done: number, total: number) => void) => Promise<{ days: number; added: number }>;

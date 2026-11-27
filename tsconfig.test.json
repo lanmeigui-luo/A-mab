@@ -36,6 +36,7 @@
     "src/lib/plan-missing.ts",
     "src/lib/board-heat.ts",
     "src/lib/kline-stats-line.ts",
+    "src/lib/plan-overlay.ts",
     "src/domain/nav-context.ts",
     "src/lib/winrate-backfill.ts",
     "scripts/winrate-acceptance.ts"
