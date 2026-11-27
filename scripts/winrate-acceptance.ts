@@ -3143,5 +3143,30 @@ function runPlanOverlayAssertion() {
     check(appSrc.includes('overridePlan={detail.overridePlan}'), 'App 把 overridePlan 传给 StockDetail');
     const sdSrc = fs.readFileSync('src/components/StockDetail.tsx', 'utf8');
     check(sdSrc.includes('overridePlan={overridePlan}'), 'StockDetail 把 overridePlan 传给 KlineChart');
+
+    // 关键断点（2026-11-27 实测反馈）：App 传给 WinRateScreen 的 onOpenKline 包装层
+    // 若只接 3 个参数会吞掉 overridePlan/overrideStrategyName，导致整条链断开。
+    const winrateBlock = appSrc.slice(appSrc.indexOf('<WinRateScreen'), appSrc.indexOf('</WinRateScreen>') >= 0 ? appSrc.indexOf('</WinRateScreen>') : appSrc.indexOf('<WinRateScreen') + 1200);
+    check(winrateBlock.includes('overridePlan?: TradePlan | null'), 'App 的 onOpenKline 包装层声明了 overridePlan 形参');
+    check(/openDetail\(fullCode, name, nextNav, overridePlan, overrideStrategyName\)/.test(winrateBlock),
+          'App 的 onOpenKline 包装层把 override 两参透传给 openDetail');
+    check(/overridePlan\?:[^)]*overrideStrategyName/.test(appSrc.match(/const openDetail = \([\s\S]*?\) => \{/)?.[0] ?? ''),
+          'openDetail 函数接收 overridePlan 与 overrideStrategyName');
+    check(appSrc.includes('overridePlan: overridePlan ?? null'), 'openDetail 把 override 存进 detail state');
+  }
+
+  // —— 用例 F：用户实测真实案例（中国中车 601766，低吸回踩，记录日 11-26）——
+  {
+    const rec = makeRec({
+      date: '2026-11-26', code: '601766', name: '中国中车',
+      strategyName: '低吸回踩', buyLow: 6.49, buyHigh: 6.76, stop: 6.29, target1: 6.78, target2: 7.08,
+    });
+    const p = planFromRecord(rec)!;
+    check(p.stop === 6.29 && p.target1 === 6.78, '实测案例：止损6.29/目标6.78 能从记录重建');
+    check(recordedStrategyLabel(p.strategyName) === '记录战法：低吸回踩', '实测案例：标题写出「记录战法：低吸回踩」');
+    const drawn = resolveChartPlan(true, p, null);
+    check(drawn?.stop === 6.29 && drawn?.target1 === 6.78, '实测案例：点开战法线画的是 6.29/6.78 历史价');
+    const groups = buildSignalGroups(p, rec.strategyName, null);
+    check(groups.length === 1 && groups[0].label === '记录战法：低吸回踩', '实测案例：战法信号区显示历史记录组');
   }
 }

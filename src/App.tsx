@@ -282,7 +282,13 @@ export default function App() {
         ) : tab === 'winrate' ? (
           <WinRateScreen
             nav={nav}
-            onOpenKline={(fullCode: string, name: string, nextNav?: NavContext | null) => openDetail(fullCode, name, nextNav)}
+            onOpenKline={(
+              fullCode: string,
+              name: string,
+              nextNav?: NavContext | null,
+              overridePlan?: TradePlan | null,
+              overrideStrategyName?: string | null,
+            ) => openDetail(fullCode, name, nextNav, overridePlan, overrideStrategyName)}
             onCloseKline={() => setDetail(null)}
             onNavigate={navigate}
             onNavChange={setNav}
